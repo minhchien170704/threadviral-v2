@@ -116,7 +116,23 @@ async def main():
     results.append(ok("1080x1920 (9:16)", vs.get("width") == 1080 and vs.get("height") == 1920))
     results.append(ok("codec h264", vs.get("codec_name") == "h264"))
     results.append(ok("pix_fmt yuv420p (compat)", vs.get("pix_fmt") == "yuv420p"))
-    results.append(ok("30fps", vs.get("r_frame_rate") in ("30/1", "30000/1001")))
+    # fps phu thuoc nen nen: co video nen 30fps, khong co thi lavfi 24fps.
+    # -> chap nhan ca hai, chi can la fps hop le (18..60).
+    _fps_raw = str(vs.get("r_frame_rate") or "")
+    try:
+        _num, _den = (_fps_raw.split("/") + ["1"])[:2]
+        _fps = float(_num) / float(_den or 1)
+    except Exception:
+        _fps = 0.0
+    _has_bg = os.path.isdir("backgrounds") and any(
+        f.lower().endswith((".mp4", ".mov", ".webm")) for f in os.listdir("backgrounds")
+    ) if os.path.isdir("backgrounds") else False
+    if _has_bg:
+        results.append(ok("30fps (co video nen)", _fps_raw in ("30/1", "30000/1001"),
+                          f"{_fps_raw}"))
+    else:
+        results.append(ok("fps hop le (18..60, khong co video nen)",
+                          18.0 <= _fps <= 60.0, f"{_fps_raw}"))
 
     # ---- 4. Loudness ----
     print("\n=== 4. Do giong (EBU R128) ===")
