@@ -1,6 +1,7 @@
 """Tiện ích dùng chung: bọc text, đo thời lượng media, kiểm tra file an toàn."""
 import os
 import re
+import shutil
 import subprocess
 from pathlib import Path
 from typing import Optional
@@ -62,8 +63,27 @@ def wrap_text_to_lines(text: str, font=None, max_width: int = 900, draw=None) ->
 # Media helpers
 # ---------------------------------------------------------------------------
 def _tool(name: str) -> str:
-    """Đường dẫn tới ffmpeg/ffprobe kèm theo."""
-    return str(Path(bin_dir()) / name)
+    """
+    Đường dẫn tới ffmpeg/ffprobe.
+
+    Ưu tiên bản đi kèm trong `bin/`. Nếu không có (clone repo từ GitHub,
+    cài đặt qua pip...) -> fallback sang `shutil.which()` để tìm trong PATH.
+
+    BUG ĐÃ SỬA: trước đây hàm này luôn trả về `<APP_ROOT>/ffmpeg.exe`
+    kể cả khi file không tồn tại -> render fail với lỗi khó hiểu
+    ("Không tạo được giọng đọc") dù máy đã có ffmpeg trong PATH.
+    """
+    b = bin_dir()
+    if b is not None:
+        cand = Path(b) / name
+        if cand.exists():
+            return str(cand)
+    # Fallback: tìm trong PATH
+    found = shutil.which(name if not name.endswith(".exe") else name[:-4])
+    if found:
+        return found
+    # Không tìm thấy: trả về đường dẫn "kỳ vọng" để thông báo lỗi rõ ràng
+    return str(Path(b) / name) if b is not None else name
 
 
 def ffmpeg_bin() -> str:

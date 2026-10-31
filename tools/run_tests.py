@@ -432,6 +432,14 @@ check("ensure_dirs() tao thu muc 'temp'",
       (Path(__file__).resolve().parent.parent / "temp").exists(),
       str(Path(__file__).resolve().parent.parent / "temp"))
 
+# --- Bug 7: ffmpeg fallback sang PATH khi khong co bin/ ---
+from tvcore.utils import ffmpeg_bin, ffprobe_bin
+
+check("ffmpeg_bin() tra ve file TON TAI",
+      os.path.exists(ffmpeg_bin()), ffmpeg_bin())
+check("ffprobe_bin() tra ve file TON TAI",
+      os.path.exists(ffprobe_bin()), ffprobe_bin())
+
 # ===========================================================================
 print("\n" + "=" * 62)
 print(f"  PASS: {len(PASS)}   FAIL: {len(FAIL)}")

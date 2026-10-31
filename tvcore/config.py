@@ -36,18 +36,31 @@ def ensure_dirs() -> None:
 
 
 def bin_dir() -> Path:
-    """Thư mục chứa ffmpeg/ffprobe."""
+    """
+    Thư mục chứa ffmpeg/ffprobe.
+
+    CHỈ trả về thư mục thực sự TỒN TẠI và CÓ chứa file ffmpeg.
+    Nếu không, trả None -> `utils._tool()` sẽ fallback sang `shutil.which()`
+    (tìm ffmpeg trong PATH) thay vì trả về đường dẫn không tồn tại.
+    """
     for cand in (APP_ROOT / "bin", APP_ROOT, WORK_ROOT / "bin"):
-        if cand.exists():
+        if not cand.exists():
+            continue
+        try:
+            names = os.listdir(cand)
+        except OSError:
+            continue
+        # Thư mục phải thực sự chứa ffmpeg mới dùng được
+        if any(n.lower().startswith("ffmpeg") for n in names):
             return cand
-    return APP_ROOT
+    return None
 
 
 def ensure_ffmpeg_in_path() -> None:
     """Đảm bảo ffmpeg & ffprobe nằm trong PATH (quan trọng khi đóng gói EXE)."""
-    b = str(bin_dir())
-    if b and b not in os.environ.get("PATH", "").split(os.pathsep):
-        os.environ["PATH"] = b + os.pathsep + os.environ.get("PATH", "")
+    b = bin_dir()
+    if b and str(b) not in os.environ.get("PATH", "").split(os.pathsep):
+        os.environ["PATH"] = str(b) + os.pathsep + os.environ.get("PATH", "")
 
 
 def ensure_playwright_browsers() -> None:
