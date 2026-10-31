@@ -15,6 +15,7 @@ BUG ĐÃ SỬA (Đợt 1): trước đây `scene_duration()` clamp cứng ở MA
    Nay MAX_SCENE_SECONDS chỉ là NGUỒNG KHUYẾN NGHỊ chia visual, KHÔNG cắt audio.
 """
 from typing import Any, Dict, List, Optional
+import math
 
 # Bảng tham khảo theo đề xuất (giây) cho từng khoảng số từ
 WORD_BANDS = [
@@ -172,8 +173,8 @@ def split_visual_segments(
     if seg_max <= 0:
         seg_max = MAX_SCENE_SECONDS
 
-    n = max(1, int(round(dur / seg_max)))
-    # Tránh tạo segment quá ngắn ở cuối (vòng lặp chia đều thay vì chia dư)
+    n = max(1, int(math.ceil(dur / seg_max)))
+    # Chia đều thành n phần -> mỗi phần <= seg_max
     step = dur / n
     segments: List[Dict[str, float]] = []
     for i in range(n):
