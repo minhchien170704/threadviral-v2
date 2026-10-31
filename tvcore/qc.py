@@ -20,7 +20,9 @@ from typing import Any, Dict, List, Optional, Tuple
 from .content import (
     is_duplicate, normalize_text, spam_reasons, count_words,
 )
-from .pacing import MIN_READ_SECONDS, min_read_seconds, estimate_speech_seconds
+from .pacing import (
+    MIN_READ_SECONDS, estimate_speech_seconds, min_read_seconds, scene_duration,
+)
 
 SEVERITY_ORDER = {"error": 0, "warning": 1, "info": 2}
 
@@ -41,9 +43,15 @@ def _issue(severity: str, code: str, message: str,
 # ---------------------------------------------------------------------------
 # 1. Kiểm tra kịch bản (trước render)
 # ---------------------------------------------------------------------------
-def check_script(scenes: List[Dict[str, Any]], speed: str = "+20%") -> Dict[str, Any]:
+def check_script(scenes: List[Dict[str, Any]], speed: str = "+20%",
+                 audio_durations: Optional[List[float]] = None) -> Dict[str, Any]:
     """
     Kiểm tra kịch bản trước khi render.
+
+    `audio_durations`: (tuỳ chọn) thời lượng TTS thực tế theo thứ tự cảnh.
+        Khi có, QC dùng số này thay vì ước lượng -> phát hiện chính xác
+        tình trạng audio dài hơn thời lượng cảnh (bug Đợt 1).
+
     Trả về {"issues": [...], "summary": {...}, "ok": bool}
     """
     issues: List[Dict[str, Any]] = []
@@ -130,10 +138,30 @@ def check_script(scenes: List[Dict[str, Any]], speed: str = "+20%") -> Dict[str,
                 scene=i, fix="Gộp với cảnh khác.",
             ))
 
+        # --- ĐỢT 1: AUDIO DÀI HƠN THỜI LƯỠNG CẢNH ---
+        # Nếu biết thời lượng audio thật và thời lượng cảnh ngắn hơn ->
+        # giọng đọc sẽ bị cắt mất. Đây là lỗi nghiêm trọng (mất lời đọc).
+        if audio_durations and i < len(audio_durations):
+            _aud = audio_durations[i]
+            if _aud and _aud > 0:
+                _scene_dur = scene_duration(text, _aud, speed)
+                if _scene_dur + 0.01 < _aud:
+                    issues.append(_issue(
+                        "error", "audio_longer_than_scene",
+                        f"Cảnh {i + 1}: audio dài {_aud:.1f}s nhưng cảnh chỉ "
+                        f"{_scene_dur:.1f}s - giọng đọc sẽ bị cắt mất.",
+                        scene=i,
+                        fix="Bật 'Tự động chia cảnh' hoặc rút gọn nội dung.",
+                    ))
+
     # --- Tổng thời lượng ước tính ---
-    est_total = sum(estimate_speech_seconds(
-        (sc.get("display_text") or "") if isinstance(sc, dict) else "", speed
-    ) for sc in scenes)
+    # Nếu đã có thời lượng audio thật -> dùng số đó (chính xác hơn ước lượng)
+    if audio_durations:
+        est_total = sum(float(d or 0) for d in audio_durations)
+    else:
+        est_total = sum(estimate_speech_seconds(
+            (sc.get("display_text") or "") if isinstance(sc, dict) else "", speed
+        ) for sc in scenes)
     est_total += 0.15 * len(scenes)
 
     if est_total < 15:

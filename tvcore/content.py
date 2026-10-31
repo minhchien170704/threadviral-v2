@@ -31,6 +31,60 @@ WEIGHTS: Dict[str, float] = {
     "concise": 0.10,       # dễ hiểu, ngắn gọn
 }
 
+# Tên các trọng số hợp lệ (dùng để validate input từ API)
+WEIGHT_KEYS = tuple(WEIGHTS.keys())
+
+
+class WeightError(ValueError):
+    """Trọng số không hợp lệ."""
+
+
+def validate_weights(weights: Optional[Dict[str, float]]) -> Dict[str, float]:
+    """
+    Kiểm tra trọng số chấm điểm do người dùng truyền vào.
+
+    Quy tắc:
+      - Không truyền gì -> trả về WEIGHTS mặc định (giữ nguyên hành vi cũ).
+      - Phải có ĐÚNG các khoá hợp lệ (không thiếu, không thừa).
+      - Mỗi giá trị phải là số thực trong [0, 1].
+      - Không được âm.
+      - Tổng phải > 0 (không được tất cả bằng 0).
+      - Tổng được chuẩn hoá về 1.0 để điểm luôn nằm trong [0, 1].
+
+    Raise WeightError nếu không hợp lệ.
+    """
+    if weights is None:
+        return dict(WEIGHTS)
+
+    if not isinstance(weights, dict):
+        raise WeightError("Trọng số phải là object (dict).")
+
+    missing = [k for k in WEIGHT_KEYS if k not in weights]
+    extra = [k for k in weights if k not in WEIGHT_KEYS]
+    if missing:
+        raise WeightError(f"Thiếu trọng số: {', '.join(missing)}.")
+    if extra:
+        raise WeightError(f"Trọng số không hợp lệ: {', '.join(extra)}.")
+
+    clean: Dict[str, float] = {}
+    for k in WEIGHT_KEYS:
+        v = weights[k]
+        if isinstance(v, bool) or not isinstance(v, (int, float)):
+            raise WeightError(f"Trọng số '{k}' phải là số.")
+        fv = float(v)
+        if fv < 0:
+            raise WeightError(f"Trọng số '{k}' không được âm.")
+        if fv > 1:
+            raise WeightError(f"Trọng số '{k}' không được vượt quá 1.")
+        clean[k] = fv
+
+    total = sum(clean.values())
+    if total <= 0:
+        raise WeightError("Tổng trọng số phải lớn hơn 0.")
+
+    # Chuẩn hoá về tổng 1.0 -> điểm luôn trong [0, 1]
+    return {k: round(v / total, 6) for k, v in clean.items()}
+
 # Ngưỡng coi là trùng (Jaccard trên tập từ khóa)
 DUP_JACCARD = 0.82
 # Ngưỡng coi là gần giống (độ tương đồng chuỗi)
@@ -118,6 +172,53 @@ def keyword_set(text: str) -> set:
 
 def count_words(text: str) -> int:
     return len(tokens(text))
+
+
+# ---------------------------------------------------------------------------
+# ĐỢT 1: Parse lượt thích từ dữ liệu thô
+# ---------------------------------------------------------------------------
+_LIKES_SUFFIX_RE = re.compile(
+    r"^([0-9]+(?:[.,][0-9]+)?)\s*([KMBkmb])?", re.UNICODE
+)
+
+
+def parse_likes(raw: Any) -> int:
+    """
+    Chuyển giá trị likes thô thành số nguyên.
+
+    Hỗ trợ: 12, "12", "1.2K", "1,2K", "3.3M", "87 lượt thích", "1.2K likes".
+
+    QUY TẮC (Đợt 1):
+      - Nguồn KHÔNG cung cấp likes -> 0 (KHÔNG tự tạo số).
+      - Giá trị không parse được -> 0 (an toàn cho pipeline).
+      - Số âm -> 0.
+    """
+    if raw is None:
+        return 0
+    if isinstance(raw, bool):
+        return 0
+    if isinstance(raw, (int, float)):
+        try:
+            return max(0, int(raw))
+        except (TypeError, ValueError, OverflowError):
+            return 0
+
+    s = str(raw).strip()
+    if not s:
+        return 0
+    m = _LIKES_SUFFIX_RE.match(s)
+    if not m:
+        return 0
+    try:
+        num = float(m.group(1).replace(",", "."))
+    except (TypeError, ValueError):
+        return 0
+    suffix = (m.group(2) or "").upper()
+    mult = {"K": 1000.0, "M": 1000000.0, "B": 1000000000.0}.get(suffix, 1.0)
+    try:
+        return max(0, int(num * mult))
+    except (TypeError, ValueError, OverflowError):
+        return 0
 
 
 # ---------------------------------------------------------------------------
@@ -314,13 +415,19 @@ def _clamp01(v: float) -> float:
 # ---------------------------------------------------------------------------
 # Chấm điểm bình luận
 # ---------------------------------------------------------------------------
-def score_comment(text: str, root_text: str = "", likes: int = 0) -> Dict[str, Any]:
+def score_comment(text: str, root_text: str = "", likes: int = 0,
+                  weights: Optional[Dict[str, float]] = None) -> Dict[str, Any]:
     """
     Chấm điểm 1 bình luận.
 
+    `weights`: (tuỳ chọn) trọng số thay thế. Nếu None -> dùng WEIGHTS mặc định.
+      Trọng số truyền vào PHẢI được validate trước (validate_weights).
+
     Trả về:
-      {"total": 0..1, "parts": {...}, "reasons": [...], "words": int}
+      {"total": 0..1, "parts": {...}, "reasons": [...], "words": int,
+       "score_reasons": [...], "likes": int, "like_bonus": float}
     """
+    w = validate_weights(weights) if weights is not None else dict(WEIGHTS)
     t = (text or "").strip()
     n_words = count_words(t)
     n_chars = len(t)
@@ -393,7 +500,7 @@ def score_comment(text: str, root_text: str = "", likes: int = 0) -> Dict[str, A
         "relevance": s_relevance,
         "concise": s_concise,
     }
-    total = sum(parts[k] * WEIGHTS[k] for k in WEIGHTS)
+    total = sum(parts[k] * w[k] for k in w)
 
     # --- 6. Điểm cộng theo lượt thích (log-scale, tối đa +0.10) ---
     # 0 like -> +0.00; 9 like -> ~+0.05; 999 like -> +0.09; 99 999 -> +0.10
@@ -421,12 +528,47 @@ def score_comment(text: str, root_text: str = "", likes: int = 0) -> Dict[str, A
     if like_bonus >= 0.05:
         reasons.append("nhiều lượt thích")
 
+    # --- ĐỢT 1: GIẢI THÍCH ĐIỂM CHI TIẾT (score_reasons) ---
+    # Mỗi lý do là chuỗi mô tả dễ đọc cho UI, kèm mức độ mạnh.
+    score_reasons: List[Dict[str, Any]] = []
+
+    def _add(key: str, label: str, score: float, threshold: float, why: str):
+        if score >= threshold:
+            score_reasons.append({
+                "key": key,
+                "label": label,
+                "score": round(float(score), 4),
+                "contribution": round(float(score) * w[key], 4),
+                "why": why,
+            })
+
+    _add("interesting", "Độ thú vị", parts["interesting"], 0.5,
+         "Có câu hỏi, ý kiến cá nhân hoặc kể chuyện riêng.")
+    _add("discussion", "Gây thảo luận", parts["discussion"], 0.5,
+         "Có câu hỏi kích thích thảo luận hoặc ý kiến trái ngược.")
+    _add("humor", "Hài hước / bất ngờ", parts["humor"], 0.45,
+         "Có yếu tố hài hước hoặc bất ngờ trong cách diễn đạt.")
+    _add("relevance", "Liên quan bài viết", parts["relevance"], 0.45,
+         "Liên quan trực tiếp đến nội dung bài đăng gốc.")
+    _add("concise", "Ngắn gọn / dễ hiểu", parts["concise"], 0.6,
+         "Độ dài vừa phải để đọc nhanh trên màn hình điện thoại.")
+    if n_likes > 0:
+        score_reasons.append({
+            "key": "likes",
+            "label": "Lượt tương tác",
+            "score": round(like_bonus, 4),
+            "contribution": round(like_bonus, 4),
+            "why": f"Nhận {n_likes} lượt thích trên bài gốc.",
+        })
+
     return {
         "total": round(total, 4),
         "parts": {k: round(v, 4) for k, v in parts.items()},
         "reasons": reasons,
+        "score_reasons": score_reasons,
         "words": n_words,
         "chars": n_chars,
+        "likes": n_likes,
         "like_bonus": round(like_bonus, 4),
     }
 
@@ -439,15 +581,20 @@ def select_comments(
     root_text: str = "",
     max_n: int = 5,
     min_score: float = 0.18,
+    weights: Optional[Dict[str, float]] = None,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     """
     Lọc + xếp hạng + chọn bình luận đa dạng.
 
     `comments`: list dict {"text", "likes"(int|str), ...}
+    `weights`: (tuỳ chọn) trọng số thay thế (đã validate trước).
     Trả về (selected, stats).
-      selected: list dict {"text", "score", "parts", "reasons", "index"}
-      stats: {"total", "spam", "duplicate", "short", "selected", "avg_score"}
+      selected: list dict {"text", "score", "parts", "reasons", "index",
+                           "score_reasons", "likes", "rejection_reason"}
+      stats: {"total", "spam", "duplicate", "short", "selected", "avg_score",
+              "rejected": [{"index", "text", "rejection_reason"}]}
     """
+    w = validate_weights(weights) if weights is not None else dict(WEIGHTS)
     stats = {
         "total": len(comments),
         "spam": 0,
@@ -455,6 +602,7 @@ def select_comments(
         "invalid": 0,
         "selected": 0,
         "avg_score": 0.0,
+        "rejected": [],
     }
     if not comments:
         return [], stats
@@ -462,10 +610,18 @@ def select_comments(
     kept: List[Dict[str, Any]] = []
     seen_norm: List[str] = []
 
+    def _reject(idx_: int, text_: str, reason: str):
+        stats["rejected"].append({
+            "index": idx_,
+            "text": (text_ or "")[:120],
+            "rejection_reason": reason,
+        })
+
     for idx, c in enumerate(comments):
         text = (c.get("text") or "").strip()
         if not text:
             stats["invalid"] += 1
+            _reject(idx, text, "nội dung rỗng")
             continue
 
         reasons = spam_reasons(text)
@@ -474,33 +630,35 @@ def select_comments(
             hard = [r for r in reasons if r not in ("quá dài", "quá ngắn")]
             if hard:
                 stats["spam"] += 1
+                _reject(idx, text, f"spam: {', '.join(hard)}")
                 continue
             if "quá ngắn" in reasons:
                 stats["invalid"] += 1
+                _reject(idx, text, "quá ngắn")
                 continue
             text = text[:MAX_COMMENT_CHARS].rsplit(" ", 1)[0]
 
         norm = normalize_text(text)
         if any(is_duplicate(text, prev) for prev in seen_norm):
             stats["duplicate"] += 1
+            _reject(idx, text, "trùng lặp nội dung đã chọn")
             continue
 
         likes = c.get("likes_num")
         if likes is None:
-            try:
-                likes = int(str(c.get("likes") or "0").replace(".", "").replace(",", "") or 0)
-            except (TypeError, ValueError):
-                likes = 0
+            likes = parse_likes(c.get("likes"))
 
-        sc = score_comment(text, root_text, likes or 0)
+        sc = score_comment(text, root_text, likes or 0, weights=w)
         kept.append({
             "index": idx,
             "text": text,
             "score": sc["total"],
             "parts": sc["parts"],
             "reasons": sc["reasons"],
+            "score_reasons": sc["score_reasons"],
             "words": sc["words"],
             "likes": likes or 0,
+            "rejection_reason": None,
             "item": c,
         })
         seen_norm.append(text)
@@ -510,6 +668,14 @@ def select_comments(
 
     # Lọc theo ngưỡng điểm
     pool = [k for k in kept if k["score"] >= min_score] or kept
+
+    # Những bình luận bị loại vì điểm thấp (nằm ngoài ngưỡng) -> ghi lý do
+    if kept and pool is not kept:
+        pool_ids = {id(k) for k in pool}
+        for k in kept:
+            if id(k) not in pool_ids:
+                _reject(k["index"], k["text"],
+                        f"chất lượng thấp (điểm {k['score']:.2f} < {min_score:.2f})")
 
     # Chọn đa dạng: mỗi lần chọn điểm cao nhất sau khi trừ phạt trùng lặp
     selected: List[Dict[str, Any]] = []

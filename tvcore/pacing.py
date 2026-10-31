@@ -9,6 +9,10 @@ Giải quyết Lỗi C: thời gian hiển thị phải khớp với:
 
 Nguyên tắc: thời lượng cảnh = max(thời gian đọc, thời gian nghe TTS, thời gian đọc tối thiểu).
 Không bao giờ cắt ngắn hơn thời gian TTS -> tránh mất đầu/cuối câu.
+
+BUG ĐÃ SỬA (Đợt 1): trước đây `scene_duration()` clamp cứng ở MAX_SCENE_SECONDS=12.0.
+=> Một đoạn TTS dài 27s bị cắt còn 12s -> mất 15s giọng đọc.
+   Nay MAX_SCENE_SECONDS chỉ là NGUỒNG KHUYẾN NGHỊ chia visual, KHÔNG cắt audio.
 """
 from typing import Any, Dict, List, Optional
 
@@ -23,8 +27,15 @@ WORD_BANDS = [
 # Tốc độ đọc trung bình (từ/giây) theo giọng + tốc độ TTS
 BASE_WPS = 3.4          # ~3.4 từ/giây khi đọc bình thường
 MIN_READ_SECONDS = 1.6  # ngắn nhất cho 1 cảnh
-MAX_SCENE_SECONDS = 12.0
 PAUSE_BETWEEN_SCENES = 0.15
+
+# NGUỒNG KHUYẾN NGHỊ: một visual nên ngắn hơn mức này để người xem
+# không bị "đứng hình" nhìn một thẻ quá lâu.
+# TUYỆT ĐỐI KHÔNG dùng giá trị này để CẮT audio.
+MAX_SCENE_SECONDS = 12.0
+
+# Khoảng đệm thêm sau mỗi cảnh (giây) - giữ nguyên thiết kế cũ
+SCENE_PAD_SECONDS = 0.15
 
 # Khoảng nghỉ thêm sau dấu câu (tính vào giọng đọc)
 PUNCT_PAUSE = {
@@ -114,6 +125,13 @@ def scene_duration(
     - Hook: luôn >= 2.5s để tạo được ấn tượng đầu video.
     - CTA : luôn >= 2.0s.
     - Bình thường: max(đọc tối thiểu, TTS thực tế) + đệm nhỏ.
+
+    BUG ĐÃ SỬA (Đợt 1): KHÔNG còn clamp `min(..., MAX_SCENE_SECONDS)`.
+    Trước đây một đoạn TTS 27s bị cắt còn 12s -> mất 15s giọng đọc.
+    Nay hàm luôn trả về >= audio_duration (khi có audio thật).
+
+    MAX_SCENE_SECONDS giờ chỉ dùng làm ngưỡng khuyến nghị trong
+    `split_visual_segments()` (chia visual, KHÔNG cắt audio).
     """
     t = (text or "").strip()
     est = estimate_speech_seconds(t, speed)
@@ -129,7 +147,45 @@ def scene_duration(
     if is_cta:
         base = max(base, 2.0)
 
-    return round(min(base + 0.15, MAX_SCENE_SECONDS), 3)
+    # KHÔNG clamp ở MAX_SCENE_SECONDS - audio phải phát đủ.
+    return round(base + SCENE_PAD_SECONDS, 3)
+
+
+def split_visual_segments(
+    audio_duration: float,
+    max_segment: float = MAX_SCENE_SECONDS,
+) -> List[Dict[str, float]]:
+    """
+    Chia một đoạn audio dài thành nhiều VISUAL segment liên tục.
+
+    Audio KHÔNG bị cắt: mỗi segment chỉ là một khoảng thời gian trên
+    cùng một file audio (dùng để đổi ảnh giữa chừng).
+
+    Ví dụ audio 27s, max_segment 9s -> 3 segment: 0-9, 9-18, 18-27.
+
+    Trả về list [{"index", "start", "end", "duration"}].
+    """
+    dur = float(audio_duration or 0.0)
+    if dur <= 0:
+        return []
+    seg_max = float(max_segment or MAX_SCENE_SECONDS)
+    if seg_max <= 0:
+        seg_max = MAX_SCENE_SECONDS
+
+    n = max(1, int(round(dur / seg_max)))
+    # Tránh tạo segment quá ngắn ở cuối (vòng lặp chia đều thay vì chia dư)
+    step = dur / n
+    segments: List[Dict[str, float]] = []
+    for i in range(n):
+        start = round(i * step, 3)
+        end = round(dur if i == n - 1 else (i + 1) * step, 3)
+        segments.append({
+            "index": i,
+            "start": start,
+            "end": end,
+            "duration": round(end - start, 3),
+        })
+    return segments
 
 
 def plan_timeline(
@@ -143,7 +199,8 @@ def plan_timeline(
     `scenes`: list dict có "display_text" (và tùy chọn "author" = "__hook__"/"__cta__")
     `audio_durations`: thời lượng TTS thực tế (nếu có) theo thứ tự cảnh.
 
-    Trả về list dict {"duration": float, "estimated": bool, "words": int}
+    Trả về list dict {"duration", "estimated", "words", "audio_duration",
+                      "needs_visual_split", "visual_segments"}
     """
     plan: List[Dict[str, Any]] = []
     for i, sc in enumerate(scenes):
@@ -152,14 +209,21 @@ def plan_timeline(
         aud = None
         if audio_durations and i < len(audio_durations):
             aud = audio_durations[i]
+        dur = scene_duration(
+            text, aud, speed,
+            is_hook=(author == "__hook__"),
+            is_cta=(author == "__cta__"),
+        )
+        # Nếu audio dài hơn ngưỡng khuyến nghị -> visual nên được chia
+        # (audio vẫn phát liên tục, chỉ đổi ảnh giữa chừng).
+        needs_split = bool(aud and aud > MAX_SCENE_SECONDS)
         plan.append({
-            "duration": scene_duration(
-                text, aud, speed,
-                is_hook=(author == "__hook__"),
-                is_cta=(author == "__cta__"),
-            ),
+            "duration": dur,
             "estimated": aud is None,
             "words": count_words(text),
+            "audio_duration": round(float(aud), 3) if aud else None,
+            "needs_visual_split": needs_split,
+            "visual_segments": split_visual_segments(aud) if needs_split else [],
         })
     return plan
 
@@ -173,6 +237,10 @@ def adjust_to_target_total(
     """
     Cân bằng tổng thời lượng về mục tiêu (vd 45-55s) mà không làm cảnh nào
     quá ngắn để đọc (tối thiểu 70% thời lượng gốc).
+
+    BUG ĐÃ SỬA (Đợt 1): không còn clamp ở MAX_SCENE_SECONDS khi bù phần lệch.
+    Ngoài ra KHÔNG được rút ngắn cảnh xuống dưới thời lượng audio thật
+    (nếu có `audio_duration` trong plan).
     """
     if not plan:
         return plan
@@ -188,7 +256,12 @@ def adjust_to_target_total(
         ratio = max(ratio, floor_ratio)
 
     for p in plan:
-        p["duration"] = round(max(MIN_READ_SECONDS, p["duration"] * ratio), 3)
+        new_dur = max(MIN_READ_SECONDS, p["duration"] * ratio)
+        # TUYỆT ĐỐI không cắt ngắn hơn audio thật
+        aud = p.get("audio_duration")
+        if aud:
+            new_dur = max(new_dur, float(aud))
+        p["duration"] = round(new_dur, 3)
 
     # Bù phần lệch nhỏ bằng cách phân bổ vào cảnh dài nhất
     new_total = sum(p["duration"] for p in plan)
@@ -196,7 +269,7 @@ def adjust_to_target_total(
     if abs(diff) > 0.05 and plan:
         idx = max(range(len(plan)), key=lambda i: plan[i]["duration"])
         plan[idx]["duration"] = round(
-            max(MIN_READ_SECONDS, min(MAX_SCENE_SECONDS, plan[idx]["duration"] + diff)), 3
+            max(MIN_READ_SECONDS, plan[idx]["duration"] + diff), 3
         )
 
     return plan

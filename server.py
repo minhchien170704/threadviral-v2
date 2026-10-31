@@ -34,7 +34,9 @@ from tvcore.config import (
     RESOLUTIONS, WORK_ROOT, ensure_dirs, ensure_ffmpeg_in_path,
     ensure_playwright_browsers,
 )
-from tvcore.content import analyze_post, select_comments
+from tvcore.content import (
+    WEIGHTS, WeightError, analyze_post, select_comments, validate_weights,
+)
 from tvcore.hook import auto_generate_hook_cta
 from tvcore.pacing import plan_timeline
 from tvcore.qc import check_rights, check_script, check_video
@@ -79,6 +81,24 @@ def _get_render_lock() -> asyncio.Lock:
     if _render_lock is None:
         _render_lock = asyncio.Lock()
     return _render_lock
+
+
+def _extract_likes(raw) -> int:
+    """
+    Chuyển giá trị likes thô ("1.2K", "3,4K", "87 lượt thích", 12) thành số nguyên.
+
+    QUY TẮC (Đợt 1):
+      - Nguồn không cung cấp likes -> trả về 0 (an toàn, KHÔNG tự tạo số).
+      - Giá trị không parse được -> 0.
+      - Không bao giờ giả định comment có nhiều tương tác.
+    """
+    from tvcore.content import parse_likes
+
+    if raw is None:
+        return 0
+    if isinstance(raw, bool):
+        return 0
+    return parse_likes(raw)
 
 
 app.mount("/outputs", StaticFiles(directory=str(OUTPUTS_DIR)), name="outputs")
@@ -159,6 +179,9 @@ class AnalyzeRequest(BaseModel):
     scenes: List[SceneItem]
     max_comments: int = Field(default=5, ge=1, le=30)
     min_score: float = Field(default=0.18, ge=0.0, le=1.0)
+    # ĐỢT 1: cho phép tuỳ chỉnh trọng số chấm điểm (tuỳ chọn).
+    # Không truyền -> dùng mặc định (tương thích ngược).
+    weights: Optional[Dict[str, float]] = None
 
 
 class QcRequest(BaseModel):
@@ -333,6 +356,12 @@ async def analyze_api(req: AnalyzeRequest):
     root = scenes[0]
     root_text = (root.get("display_text") or "").strip()
 
+    # ĐỢT 1: validate trọng số (nếu có). Không truyền -> dùng mặc định.
+    try:
+        weights = validate_weights(req.weights) if req.weights is not None else None
+    except WeightError as e:
+        raise HTTPException(status_code=400, detail=f"Trọng số không hợp lệ: {e}")
+
     analysis = analyze_post(root_text)
 
     raw_comments = [
@@ -349,6 +378,7 @@ async def analyze_api(req: AnalyzeRequest):
         root_text=root_text,
         max_n=req.max_comments,
         min_score=req.min_score,
+        weights=weights,
     )
 
     scored_all = []
@@ -356,14 +386,20 @@ async def analyze_api(req: AnalyzeRequest):
         from tvcore.content import score_comment, spam_reasons
         txt = c["text"]
         hard = [r for r in spam_reasons(txt) if r not in ("quá dài", "quá ngắn")]
-        sc = score_comment(txt, root_text)
+        # BUG ĐỢT 1 ĐÃ SỬA: trước đây gọi score_comment(txt, root_text) ->
+        # KHÔNG truyền likes -> điểm hiển thị không phản ánh tương tác thật.
+        likes = _extract_likes(c.get("likes"))
+        sc = score_comment(txt, root_text, likes, weights=weights)
         scored_all.append({
             "text": txt,
             "author": c["author"],
             "score": sc["total"],
             "parts": sc["parts"],
             "reasons": sc["reasons"],
+            "score_reasons": sc["score_reasons"],
             "words": sc["words"],
+            "likes": sc["likes"],
+            "like_bonus": sc["like_bonus"],
             "spam": hard,
         })
     scored_all.sort(key=lambda x: x["score"], reverse=True)
@@ -378,11 +414,15 @@ async def analyze_api(req: AnalyzeRequest):
                 "score": s["score"],
                 "parts": s["parts"],
                 "reasons": s["reasons"],
+                "score_reasons": s["score_reasons"],
                 "words": s["words"],
+                "likes": s["likes"],
+                "rejection_reason": s.get("rejection_reason"),
             }
             for s in selected
         ],
         "stats": stats,
+        "weights": weights or dict(WEIGHTS),
     }
 
 

@@ -274,8 +274,11 @@ check("hook tối thiểu 2.5s", scene_duration("Ngắn", 1.0, is_hook=True) >= 
 check("CTA tối thiểu 2.0s", scene_duration("Ngắn", 1.0, is_cta=True) >= 2.0)
 check("không cắt ngắn hơn TTS",
       scene_duration("a b c d e", 8.0) >= 8.0)
-check("cảnh không vượt quá 12s",
-      scene_duration(" ".join(["từ"] * 500), 30.0) <= 12.0)
+# ĐỢT 1 - ĐÃ SỬA: test cũ "cảnh không vượt quá 12s" mô tả ĐÚNG bug cần sửa
+# (audio 30s bị clamp còn 12s -> mất 18s giọng đọc). Nay MAX_SCENE_SECONDS
+# chỉ là ngưỡng KHUYẾN NGHỊ chia visual, KHÔNG cắt audio.
+check("cảnh KHÔNG bị cắt khi audio dài hơn 12s (Đợt 1)",
+      scene_duration(" ".join(["từ"] * 500), 30.0) >= 30.0)
 
 # ===========================================================================
 # GIAI ĐOẠN 4 - QC

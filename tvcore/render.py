@@ -24,10 +24,10 @@ from PIL import Image
 from .cards import (
     create_watermark_image, draw_cta_card, draw_hook_card, draw_narrator_card,
     draw_single_box, safe_card_height, safe_card_width, safe_overlay_x,
-    safe_overlay_y, scale_for,
+    safe_overlay_y, scale_for, split_visual_text_parts,
 )
 from .content import select_comments
-from .pacing import scene_duration
+from .pacing import MAX_SCENE_SECONDS, scene_duration, split_visual_segments
 from .qc import check_script, check_video
 from .tts import local_slang_to_tts, make_tts_audio
 from .utils import (
@@ -362,6 +362,35 @@ async def render_video(req, progress: ProgressFn = None) -> dict:
                 "Vui lòng thử lại hoặc đổi giọng/nhịp độ."
             )
 
+        # --- ĐỢT 1: QC PASS 2 SAU KHI CÓ AUDIO THẬT ---
+        # Lần QC đầu chạy trước khi tạo TTS nên không biết thời lượng
+        # audio thật. Ở đây mới có -> kiểm tra lại để phát hiện chính xác
+        # trường hợp audio dài hơn cảnh (sẽ mất lời đọc).
+        audio_durations: List[float] = []
+        for meta in scenes_meta:
+            try:
+                audio_durations.append(get_media_duration(meta["a1_path"], 0.0))
+            except Exception:
+                audio_durations.append(0.0)
+        if not getattr(req, "skip_qc", False) and any(a > 0 for a in audio_durations):
+            try:
+                qc2 = check_script(
+                    scenes, speed=getattr(req, "speed", "+20%"),
+                    audio_durations=audio_durations,
+                )
+                _errs = [i for i in qc2["issues"] if i["severity"] == "error"]
+                if _errs:
+                    detail = "; ".join(e["message"] for e in _errs[:3])
+                    raise ValueError(
+                        f"Kiểm tra chất lượng thất bại: {detail}. "
+                        "Bấm 'Xuất bỏ qua kiểm tra' nếu muốn tiếp tục."
+                    )
+                qc_report = qc2
+            except ValueError:
+                raise
+            except Exception:
+                pass
+
         # ============ BƯỚC 2: TẠO ẢNH THẺ & LẬP TIMELINE ============
         timeline_segments = []
         audio_segment_paths = []
@@ -424,13 +453,69 @@ async def render_video(req, progress: ProgressFn = None) -> dict:
                 )
             box1_img.save(meta["c1_path"], "PNG")
 
-            timeline_segments.append({
-                "type": "card", "img_path": meta["c1_path"],
-                "dur": dur1, "start": cur_time, "end": cur_time + dur1,
-            })
-            audio_segment_paths.append(meta["a1_path"])
-            cur_time += dur1
-            last_card_path = meta["c1_path"]
+            # --- ĐỢT 1: CHIA VISUAL KHI AUDIO DÀI ---
+            # Audio dài hơn ngưỡng khuyến nghị (12s) -> người xem không nên
+            # phải nhìn MỘT thẻ đứng yên 27s. Ta chia text thành N visual
+            # (theo dòng, không mất từ), nhưng AUDIO vẫn phát LIÊN TỤC:
+            # file audio chỉ được thêm vào audio_segment_paths ĐÚNG 1 LẦN,
+            # còn visual thì nhiều đoạn dùng chung khoảng thời gian đó.
+            _visual_segs = split_visual_segments(dur1, MAX_SCENE_SECONDS)
+            _n_vis = len(_visual_segs)
+            _is_plain_card = sc["author"] not in ("__hook__", "__cta__", "__narr__")
+
+            if _n_vis > 1 and _is_plain_card:
+                _is_root_v = (meta["idx"] == 0)
+                if scenes and scenes[0]["author"] == "__hook__":
+                    _is_root_v = (meta["idx"] == 1)
+                _text_parts = split_visual_text_parts(
+                    sc.get("display_text") or "", _n_vis,
+                    scale=card_scale, vid_w=vid_w, is_root=_is_root_v,
+                )
+                # Nếu không chia được (text quá ngắn) -> giữ nguyên 1 visual
+                if len(_text_parts) > 1:
+                    for _vi, _tp in enumerate(_text_parts):
+                        _vp = f"{meta['c1_path']}.v{_vi}.png"
+                        _vimg = draw_single_box(
+                            sc["author"], sc["time_ago"], _tp, sc.get("avatar_url"),
+                            sc.get("likes", "") if _vi == 0 else "",
+                            sc.get("comments", "") if _vi == 0 else "",
+                            sc.get("reposts", "") if _vi == 0 else "",
+                            sc.get("shares", "") if _vi == 0 else "",
+                            sc.get("author_liked", True),
+                            show_footer=(_vi == len(_text_parts) - 1 and not meta["has_reply"]),
+                            is_root_post=_is_root_v,
+                            scale=card_scale, vid_w=vid_w, vid_h=vid_h,
+                            is_verified=bool(sc.get("is_verified")),
+                        )
+                        _vimg.save(_vp, "PNG")
+                        temp_files.append(_vp)
+                        _seg = _visual_segs[_vi]
+                        timeline_segments.append({
+                            "type": "card", "img_path": _vp,
+                            "dur": _seg["duration"],
+                            "start": cur_time + _seg["start"],
+                            "end": cur_time + _seg["end"],
+                        })
+                    # Audio chỉ thêm 1 LẦN cho toàn bộ nhóm visual
+                    audio_segment_paths.append(meta["a1_path"])
+                    cur_time += dur1
+                    last_card_path = timeline_segments[-1]["img_path"]
+                else:
+                    timeline_segments.append({
+                        "type": "card", "img_path": meta["c1_path"],
+                        "dur": dur1, "start": cur_time, "end": cur_time + dur1,
+                    })
+                    audio_segment_paths.append(meta["a1_path"])
+                    cur_time += dur1
+                    last_card_path = meta["c1_path"]
+            else:
+                timeline_segments.append({
+                    "type": "card", "img_path": meta["c1_path"],
+                    "dur": dur1, "start": cur_time, "end": cur_time + dur1,
+                })
+                audio_segment_paths.append(meta["a1_path"])
+                cur_time += dur1
+                last_card_path = meta["c1_path"]
 
             if meta["has_reply"]:
                 padded_a2 = pad_audio(meta["a2_path"], meta["a2_path"] + ".pad.aac", SEG_PAD)

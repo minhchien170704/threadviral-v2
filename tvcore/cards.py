@@ -7,7 +7,7 @@ Tách riêng khỏi server.py, dùng chung hàm wrap_text_to_lines nên không c
 import os
 import uuid
 from io import BytesIO
-from typing import Optional
+from typing import List, Optional
 
 import requests
 from PIL import Image, ImageDraw, ImageFont
@@ -600,6 +600,54 @@ def wrap_like_card(text: str, is_root: bool = False, scale: float = 1.0,
     f_body = get_font(sc(38) if is_root else sc(36), bold=False)
     dummy = ImageDraw.Draw(Image.new("RGBA", (10, 10)))
     return wrap_text_to_lines(text, font=f_body, max_width=max_text_w, draw=dummy)
+
+
+def split_visual_text_parts(text: str, n_parts: int, max_lines: int = MAX_LINES_PER_CARD,
+                           scale: float = 1.0, vid_w: int = 1080,
+                           is_root: bool = False) -> List[str]:
+    """
+    Chia nội dung chữ thành N phần để hiển thị nhiều visual liên tục.
+
+    Dùng khi audio của một cảnh dài hơn ngưỡng khuyến nghị (12s):
+    audio PHẢI phát liên tục, nhưng hình ảnh nên đổi để người xem không
+    phải nhìn một thẻ đứng yên 27 giây.
+
+    Ràng buộc:
+      - Chia theo DÒNG (không cắt giữa từ) -> chữ luôn đọc được.
+      - Mỗi phần không vượt quá `max_lines` dòng -> không tràn card.
+      - Nội dung đầu vào và thứ tự được giữ nguyên (không mất từ).
+      - Nếu không chia được (text quá ngắn) -> trả về [text] (1 phần).
+
+    Trả về list các chuỗi display text (thứ tự đúng nội dung gốc).
+    """
+    t = (text or "").strip()
+    if not t or n_parts <= 1:
+        return [t] if t else [""]
+
+    lines = wrap_like_card(t, is_root, scale, vid_w)
+    if len(lines) <= max_lines:
+        return [t]
+
+    # Số phần khả thi: không vượt quá số dòng, và mỗi phần <= max_lines dòng
+    n = max(1, min(int(n_parts), (len(lines) + max_lines - 1) // max_lines))
+
+    # Chia đều theo số dòng (ceil) -> mỗi phần <= max_lines dòng
+    per = (len(lines) + n - 1) // n
+    parts: List[str] = []
+    i = 0
+    while i < len(lines):
+        chunk = lines[i:i + per]
+        if not chunk:
+            break
+        parts.append(" ".join(chunk).strip())
+        i += len(chunk)
+
+    # Gộp phần cuối nếu quá ngắn (tránh 1 dòng lẻ lủng củng)
+    if len(parts) > 1 and len(parts[-1].split()) <= 2:
+        parts[-2] = (parts[-2] + " " + parts[-1]).strip()
+        parts.pop()
+
+    return parts or [t]
 
 
 def split_scene_if_long(scene, max_lines: int = MAX_LINES_PER_CARD, scale: float = 1.0,
