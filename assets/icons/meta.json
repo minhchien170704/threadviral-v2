@@ -1,0 +1,14 @@
+{
+ "viewbox": {
+  "heart": "0 0 24 24",
+  "heart_filled": "0 0 24 24",
+  "comment": "0 0 24 24",
+  "repost": "0 0 24 24",
+  "share": "0 0 24 24",
+  "more": "0 0 24 24",
+  "reply": "0 0 24 24",
+  "verified": "-4 0 27 19",
+  "threads": "0 0 24 24"
+ },
+ "render_size": 512
+}

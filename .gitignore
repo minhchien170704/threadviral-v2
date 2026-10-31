@@ -1,0 +1,60 @@
+# ===== Python =====
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+.pytest_cache/
+
+===== Build =====
+build/
+dist/
+*.spec
+
+===== Runtime / media =====
+outputs/
+temp/
+bgm/
+backgrounds/
+memes/
+bin/
+
+===== Tai nguyen nang =====
+*.mp4
+*.mov
+*.avi
+*.mkv
+*.webm
+*.exe
+*.dll
+*.pyd
+*.so
+*.zip
+*.7z
+*.rar
+
+===== Am thanh =====
+*.aac
+*.mp3
+*.wav
+*.ogg
+*.m4a
+
+===== Font =====
+*.ttf
+*.otf
+*.woff
+*.woff2
+
+===== Editor / OS =====
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.log
+*.db
+*.sqlite
+
+===== Bien moi (keep) =====
+# .cursor/ va assets/ duoc giu de AI hieu quy tac + icon
