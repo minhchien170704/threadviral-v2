@@ -199,7 +199,7 @@ class RenderRequest(BaseModel):
     speed: str = "+20%"
     watermark_text: str = "Fanpage: Ghiền đọc comment"
     moving_watermark: bool = True
-    bg_video_path: Optional[str] = "background.mp4"
+    bg_video_path: Optional[str] = "random"
     bgm_path: Optional[str] = None
     bgm_volume: float = 0.12
     resolution: str = "1080x1920"

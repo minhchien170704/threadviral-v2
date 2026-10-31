@@ -83,7 +83,7 @@ async def main():
     req = RenderRequest(
         scenes=items, voice="vi-VN-HoaiMyNeural", speed="+20%",
         watermark_text="Fanpage: Ghiền đọc comment",
-        resolution="1080x1920", bg_video_path="background.mp4",
+        resolution="1080x1920", bg_video_path="random",
     )
 
     def prog(pct, msg):

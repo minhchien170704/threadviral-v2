@@ -96,6 +96,22 @@ ffmpeg -version
 > **Ghi chú Windows:** dùng `Chay_ThreadViral_App.bat` (tự tạo venv + cài deps).
 > **Ghi chú Linux/macOS:** `python app_launcher.py` hoặc `python server.py` — ffmpeg phải có trong `PATH`.
 
+### 📦 Tài nguyên đi kèm (Git LFS)
+
+Video nền (`backgrounds/`) và nhạc nền (`bgm/`) được lưu bằng **Git LFS** —
+clone repo sẽ tự tải về đầy đủ:
+
+```bash
+git clone https://github.com/minhchien170704/threadviral-v2.git
+cd threadviral-v2
+git lfs install        # chỉ cần 1 lần trên máy
+git lfs pull          # nếu clone bằng --skip-smudge hoặc file còn là pointer
+```
+
+> Nếu chưa cài `git-lfs`: <https://git-lfs.github.com>
+> Không có LFS thì tool vẫn chạy, chỉ là **không có video nền / nhạc nền**
+> (FFmpeg sẽ dùng nền đen đơn sắc).
+
 ## ▶️ Chạy
 
 ```bash

@@ -54,9 +54,9 @@ def extract_defaults():
         if os.path.exists(idx_src) and not os.path.exists(os.path.join(work_dir, "index.html")):
             shutil.copyfile(idx_src, os.path.join(work_dir, "index.html"))
 
-        bg_src = os.path.join(bundle_dir, "background.mp4")
-        if os.path.exists(bg_src) and not os.path.exists(os.path.join(work_dir, "background.mp4")):
-            shutil.copyfile(bg_src, os.path.join(work_dir, "background.mp4"))
+    # Video nen: lay tu thu muc `backgrounds/` (da duoc Git LFS luu chung).
+    # File `background.mp4` o goc da duoc bo - trung hash voi
+    # backgrounds/gameplay_60s_part1.mp4.
 
         bgm_dir = os.path.join(bundle_dir, "bgm")
         if os.path.isdir(bgm_dir):

@@ -36,6 +36,7 @@ INCLUDE_FILES = [
 # File dinh kem
 INCLUDE_EXTRA = [
     ".gitignore",
+    ".gitattributes",
     "README.md",
 ]
 
@@ -128,18 +129,20 @@ def build(with_media: bool = False, out_name: str = "threadviral_source.zip"):
             ))
             print("  + requirements.txt (auto)")
 
-        # Video nen (tuy chon)
+        # Video nen (tuy chon) - lay 1 file trong `backgrounds/`
         if with_media:
-            bg = ROOT / "background.mp4"
-            if bg.exists():
+            bg_dir = ROOT / "backgrounds"
+            bgs = sorted(bg_dir.glob("*.mp4")) if bg_dir.is_dir() else []
+            if bgs:
                 # Lay 15 giay dau + cat nho -> nen vua du
-                print("  + background.mp4 (15s dau)")
+                print(f"  + backgrounds/{bgs[0].name} -> background.mp4 (15s dau)")
                 import subprocess
+                from tvcore.utils import ffmpeg_bin
                 tmp = ROOT / "temp" / "_pkg_bg.mp4"
                 tmp.parent.mkdir(exist_ok=True)
                 subprocess.run(
-                    ["bin" + os.sep + "ffmpeg.exe", "-y", "-hide_banner", "-loglevel",
-                     "error", "-ss", "0", "-t", "15", "-i", str(bg),
+                    [ffmpeg_bin(), "-y", "-hide_banner", "-loglevel",
+                     "error", "-ss", "0", "-t", "15", "-i", str(bgs[0]),
                      "-vf", "scale=720:-2", "-c:v", "libx264", "-crf", "30",
                      "-preset", "veryfast", "-c:a", "aac", "-b:a", "96k", str(tmp)],
                     check=False,
@@ -148,6 +151,8 @@ def build(with_media: bool = False, out_name: str = "threadviral_source.zip"):
                     zf.write(tmp, "background.mp4")
                     total += 1
                     tmp.unlink(missing_ok=True)
+            else:
+                print("  [!] Khong tim thay video nen trong backgrounds/")
 
     size_mb = out.stat().st_size / (1024 * 1024)
     print(f"\n  File: {out}")

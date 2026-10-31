@@ -15,10 +15,13 @@ dist/
 ===== Runtime / media =====
 outputs/
 temp/
-bgm/
-backgrounds/
 memes/
 bin/
+
+# --- Media dung chung (duoc luu bang Git LFS) ---
+# Video nen + nhac nen la TAI NGUYEN dung chung cho moi nguoi dung.
+# -> luu trong Git LFS de clone ve co san, khong lo gitignore.
+# Xem .gitattributes de biet quy tac tracking.
 
 ===== Tai nguyen nang =====
 *.mp4
@@ -40,6 +43,13 @@ bin/
 *.wav
 *.ogg
 *.m4a
+
+# --- Ngoai le: media dung chung luu bang Git LFS ---
+# Phai dat SAU cac rule *.mp4 / *.mp3 o tren de override.
+!backgrounds/
+!backgrounds/**
+!bgm/
+!bgm/**
 
 ===== Font =====
 *.ttf
