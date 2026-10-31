@@ -16,7 +16,7 @@ import asyncio
 import os
 import shutil
 import sys
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse

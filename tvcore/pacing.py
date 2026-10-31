@@ -268,8 +268,13 @@ def adjust_to_target_total(
     diff = target - new_total
     if abs(diff) > 0.05 and plan:
         idx = max(range(len(plan)), key=lambda i: plan[i]["duration"])
+        # KHÔNG được rút ngắn cảnh xuống dưới thời lượng audio thật
+        _floor = MIN_READ_SECONDS
+        _aud = plan[idx].get("audio_duration")
+        if _aud:
+            _floor = max(_floor, float(_aud))
         plan[idx]["duration"] = round(
-            max(MIN_READ_SECONDS, plan[idx]["duration"] + diff), 3
+            max(_floor, plan[idx]["duration"] + diff), 3
         )
 
     return plan

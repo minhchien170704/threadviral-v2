@@ -44,13 +44,18 @@ def _issue(severity: str, code: str, message: str,
 # 1. Kiểm tra kịch bản (trước render)
 # ---------------------------------------------------------------------------
 def check_script(scenes: List[Dict[str, Any]], speed: str = "+20%",
-                 audio_durations: Optional[List[float]] = None) -> Dict[str, Any]:
+                 audio_durations: Optional[List[float]] = None,
+                 scene_durations: Optional[List[float]] = None) -> Dict[str, Any]:
     """
     Kiểm tra kịch bản trước khi render.
 
     `audio_durations`: (tuỳ chọn) thời lượng TTS thực tế theo thứ tự cảnh.
         Khi có, QC dùng số này thay vì ước lượng -> phát hiện chính xác
         tình trạng audio dài hơn thời lượng cảnh (bug Đợt 1).
+
+    `scene_durations`: (tuỳ chọn) thời lượng cảnh ĐÃ DỰNG theo thứ tự cảnh.
+        Khi có, QC so sánh trực tiếp với audio -> báo lỗi nếu cảnh ngắn
+        hơn audio (tức là giọng đọc sẽ bị cắt mất).
 
     Trả về {"issues": [...], "summary": {...}, "ok": bool}
     """
@@ -144,7 +149,10 @@ def check_script(scenes: List[Dict[str, Any]], speed: str = "+20%",
         if audio_durations and i < len(audio_durations):
             _aud = audio_durations[i]
             if _aud and _aud > 0:
-                _scene_dur = scene_duration(text, _aud, speed)
+                if scene_durations and i < len(scene_durations):
+                    _scene_dur = float(scene_durations[i])
+                else:
+                    _scene_dur = scene_duration(text, _aud, speed)
                 if _scene_dur + 0.01 < _aud:
                     issues.append(_issue(
                         "error", "audio_longer_than_scene",

@@ -123,12 +123,12 @@ python app_launcher.py    # launcher tự kiểm tra môi trường
 ## 🧪 Test
 
 ```bash
-python tools/run_tests.py    # 132 unit test
+python tools/run_tests.py    # 230 unit test
 python tools/test_e2e.py     # 18 e2e test (scrape + render + ffprobe)
 python tools/verify_bugs.py  # bằng chứng cho 6 bug đã review
 ```
 
-**150/150 pass.**
+**248/248 pass** (230 unit + 18 e2e).
 
 ## 📦 API
 
@@ -143,6 +143,40 @@ python tools/verify_bugs.py  # bằng chứng cho 6 bug đã review
 | `GET /api/stats` | Thống kê + lịch sử + hiệu quả theo hook |
 | `POST /api/stats/analytics` | Nhập số liệu TikTok Analytics |
 | `POST /api/render` | Render (job nền + SSE tiến trình) |
+
+### Tuỳ chỉnh trọng số chấm điểm (Đợt 1)
+
+`POST /api/analyze` nhận thêm trường `weights` (tuỳ chọn):
+
+```json
+{
+  "scenes": [...],
+  "weights": {
+    "interesting": 0.25,
+    "discussion": 0.25,
+    "humor": 0.20,
+    "relevance": 0.20,
+    "concise": 0.10
+  }
+}
+```
+
+- **Không truyền** → dùng trọng số mặc định (tương thích ngược).
+- Phải có **đủ 5 khoá** `interesting` / `discussion` / `humor` / `relevance` / `concise`.
+- Mỗi giá trị trong `[0, 1]`, **không âm**, tổng **> 0** (tự chuẩn hoá về 1.0).
+- Trả về `400` nếu trọng số không hợp lệ.
+
+Mỗi bình luận được chấm điểm có thêm:
+- `score_reasons[]` — giải thích chi tiết tại sao được chọn (kèm điểm đóng góp).
+- `likes` / `like_bonus` — lượt thích thật từ bài gốc (điểm cộng log-scale, tối đa +0.10).
+- `stats.rejected[]` — lý do loại từng bình luận bị bỏ (spam / trùng lặp / quá ngắn / chất lượng thấp).
+
+### Pacing (Đợt 1)
+
+- Thời lượng cảnh **luôn ≥ thời lượng audio TTS thật** → giọng đọc không bao giờ bị cắt.
+- `MAX_SCENE_SECONDS = 12.0` chỉ là ngưỡng **khuyến nghị chia visual**, không phải giới hạn cắt audio.
+- Audio dài hơn 12s → tự động chia thành nhiều visual liên tục (audio phát liên tục, không lặp, không mất từ).
+- QC phát hiện lỗi `audio_longer_than_scene` khi cảnh ngắn hơn audio.
 
 ## 📁 Cấu trúc
 

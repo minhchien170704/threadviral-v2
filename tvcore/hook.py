@@ -18,24 +18,27 @@ from typing import Any, Dict, List, Optional
 # ---------------------------------------------------------------------------
 # Từ khoá dùng để dựng câu hook theo mẫu
 # ---------------------------------------------------------------------------
+# ĐỢT 1: các mẫu dưới đây KHÔNG còn khẳng định mức độ lan truyền
+# ("cả Threads chia thành hai phe", "đang làm mưa Threads"...) vì dữ liệu
+# đầu vào không chứng minh được. Cách diễn đạt nay trung tính nhưng vẫn hấp dẫn.
 _HOOK_PATTERNS = [
     # (từ khoá trong nội dung, mẫu hook)
     (("vote", "bầu", "cử", "election", "bầu cử"),
-     "Câu chuyện này đang khiến cả Threads chia thành hai phe."),
+     "Câu chuyện này có một câu hỏi khiến người đọc phải chọn một phe."),
     (("drama", "cãi", "mâu thuẫn", "lục đục", "scandal", "vụ"),
-     "Có một vụ drama đang nóng lơn trên Threads mà bạn chắc chắn chưa biết."),
+     "Có một vụ drama ngoài đời được kể lại qua vài dòng trong bài này."),
     (("vợ", "chồng", "ex", "nyc", "người yêu", "cặp đôi", "ly hôn"),
-     "Một câu chuyện tình cũ đang khiến cả Threads tranh luận không hồi kết."),
+     "Một câu chuyện tình cũ mà mỗi người đọc sẽ có một cách nhìn khác nhau."),
     (("công việc", "công ty", "sếp", "boss", "xin việc", "lương", "phỏng vấn"),
      "Câu chuyện này sẽ khiến bạn nghĩ lại chỗ làm của mình."),
     (("tiền", "lương", "đồng", "tiết kiệm", "nhà", "xe", "đầu tư"),
-     "Một câu chuyện về tiền mà ai cũng đang tranh luận."),
+     "Một câu chuyện về tiền mà nhiều người sẽ tranh luận."),
     (("học", "thi", "exam", "điểm", "trường", "university", "deadline"),
      "Câu chuyện này chắc chắn sẽ khiến bạn nhớ lại thời còn đi học."),
     (("ăn", "food", "món", "quán", "review", "nhà hàng", "mẹo"),
-     "Có một món ăn đang làm mưa Threads mà ít ai biết."),
+     "Có một món ăn trong bài này mà ít người để ý tới."),
     (("mẹ", "bố", "ba mẹ", "family", "gia đình", "cha", "mẹ"),
-     "Câu chuyện gia đình này đọc xong không ai ngủ được."),
+     "Câu chuyện gia đình này đọc xong không ai ngủ được ngay."),
     (("sức mạnh", "gym", "tập", "running", "chạy", "yoga", "sức khoẻ"),
      "Câu chuyện này sẽ thay đổi cách bạn tập luyện mãi mãi."),
     (("check", "checkin", "ra mắt", "mở bán", "launch"),
@@ -58,11 +61,13 @@ _CTA_TEMPLATES = [
 ]
 
 # Câu hook dựng từ nội dung topic (fallback khi không khớp mẫu nào)
+# ĐỢT 1: bỏ các claim bịa viral ("Threads tranh luận không hồi kết",
+# "gây tranh cãi dữ dội", "xôn xao") -> nay trung tính, dựa trên nội dung.
 _GENERIC_HOOKS = [
-    "Câu chuyện này đang làm Threads tranh luận không hồi kết.",
+    "Câu chuyện này được kể lại qua vài dòng nhưng để lại một câu hỏi.",
     "Đọc xong bài này, bạn sẽ không khỏi bình luận.",
-    "Một câu chuyện trên Threads đang gây tranh cãi dữ dội.",
-    "Bài viết này đang khiến cả Threads xôn xao.",
+    "Một câu chuyện trên Threads kết thúc bằng một câu hỏi mở.",
+    "Bài viết này có một chi tiết mà mình đọc xong phải dừng lại.",
 ]
 
 # ---------------------------------------------------------------------------
@@ -139,23 +144,41 @@ def generate_hook_cta_template(scenes: List[Dict[str, Any]]) -> Dict[str, str]:
         # Thử dựng hook từ chính nội dung topic
         snippet = _first_sentences(topic, 90)
         if snippet:
-            hook = f"“{snippet}…” Câu chuyện này đang làm Threads tranh luận."
+            hook = f"“{snippet}…” Câu chuyện này được kể lại qua vài dòng."
         else:
             hook = _GENERIC_HOOKS[0]
 
-    # Bổ sung ngữ cảnh số lượng bình luận
-    if n_comments >= 5 and "tranh luận" not in hook.lower():
+    # Bổ sung ngữ cảnh số lượng bình luận (chỉ khi THẬT SỰ có dữ liệu)
+    if n_comments >= 5 and "bình luận" not in hook.lower():
         hook = f"{hook} Chỉ riêng dưới bài đã có {n_comments} bình luận."
 
     # Chọn CTA theo hash nội dung -> đa dạng, không bị lặp giữa các video
     seed = int(hashlib.md5(topic.encode("utf-8")).hexdigest()[:8], 16)
     cta = _CTA_TEMPLATES[seed % len(_CTA_TEMPLATES)]
 
+    # ĐỢT 1: chống claim viral không có căn cứ (lớp bảo vệ cuối)
+    hook = _sanitize_viral_claim(hook, topic)
+
     return {
         "hook_text": hook.strip(),
         "cta_text": cta.strip(),
         "source": "template",
     }
+
+
+def _sanitize_viral_claim(hook: str, topic: str = "") -> str:
+    """
+    Loại bỏ các cụm từ khẳng định mức độ lan truyền KHÔNG có căn cứ.
+
+    ĐỢT 1 - spec §3.2: không được tự bịa các câu kiểu
+    "Cả Threads đang phát sốt", "Hàng nghìn người tranh cãi",
+    "Cả mạng xã hội chia thành hai phe", "Bài viết gây bão"...
+
+    Cách xử lý: thay cụm bịa bằng cách diễn đạt trung tính tương đương.
+    """
+    from .script import sanitize_viral_claim
+
+    return sanitize_viral_claim(hook)
 
 
 # ---------------------------------------------------------------------------
@@ -171,10 +194,19 @@ QUY TẮC:
 - Viết bằng tiếng Việt tự nhiên, đúng chính tả, có dấu câu.
 - KHÔNG dùng Markdown, KHÔNG giải thích, KHÔNG ghi "hook:" hay "cta:" trong giá trị.
 - KHÔNG bịa thêm sự kiện, con số hay tên người không có trong nội dung.
+- TUYỆT ĐỐI KHÔNG khẳng định mức độ lan truyền khi dữ liệu không chứng minh được.
+  KHÔNG dùng: "cả Threads đang phát sốt", "hàng nghìn người tranh cãi",
+  "cả mạng xã hội chia thành hai phe", "bài viết gây bão", "ai cũng phải bật cười",
+  "Threads xôn xao", "làm mưa Threads", "viral", "lên top".
+  Dùng cách diễn đạt trung tính nhưng vẫn hấp dẫn, ví dụ:
+  "Một câu hỏi đơn giản nhưng phần bình luận lại có hai luồng ý kiến trái ngược."
+  (chỉ dùng khi dữ liệu thực sự có hai luồng ý kiến).
 - Nếu nội dung là tiếng Trung Quốc, hãy viết lại câu hook/CTA bằng tiếng Việt theo đúng nghĩa.
 - Giữ giọng điệu hài hước, dí dỏm kiểu mạng xã hội nhưng không quá hỗn loạn.
 
 Trả về JSON đúng format: {"hook": "...", "cta": "..."}"""
+
+_GEMINI_TIMEOUT_SECONDS = 60
 
 
 async def generate_hook_cta_gemini(
@@ -206,28 +238,43 @@ async def generate_hook_cta_gemini(
     )
 
     client = genai.Client(api_key=key)
-    resp = await asyncio.to_thread(
-        client.models.generate_content,
-        model="gemini-2.5-flash",
-        contents=payload,
-        config=types.GenerateContentConfig(
-            system_instruction=_GEMINI_PROMPT,
-            temperature=0.85,
-            response_mime_type="application/json",
-            response_schema={
-                "type": "object",
-                "properties": {
-                    "hook": {"type": "string"},
-                    "cta": {"type": "string"},
-                },
-                "required": ["hook", "cta"],
-            },
-        ),
-    )
+    try:
+        resp = await asyncio.wait_for(
+            asyncio.to_thread(
+                client.models.generate_content,
+                model="gemini-2.5-flash",
+                contents=payload,
+                config=types.GenerateContentConfig(
+                    system_instruction=_GEMINI_PROMPT,
+                    temperature=0.85,
+                    response_mime_type="application/json",
+                    response_schema={
+                        "type": "object",
+                        "properties": {
+                            "hook": {"type": "string"},
+                            "cta": {"type": "string"},
+                        },
+                        "required": ["hook", "cta"],
+                    },
+                ),
+            ),
+            timeout=_GEMINI_TIMEOUT_SECONDS,
+        )
+    except asyncio.TimeoutError:
+        raise TimeoutError(f"Gemini timeout sau {_GEMINI_TIMEOUT_SECONDS}s")
 
-    data = json.loads(resp.text)
-    hook = (data.get("hook") or "").strip()
-    cta = (data.get("cta") or "").strip()
+    raw_text = (getattr(resp, "text", "") or "").strip()
+    if not raw_text:
+        raise ValueError("Gemini trả về nội dung rỗng")
+    try:
+        data = json.loads(raw_text)
+    except (ValueError, TypeError) as e:
+        raise ValueError(f"Gemini trả về JSON không hợp lệ: {e}")
+    if not isinstance(data, dict):
+        raise ValueError("Gemini trả về JSON không phải object")
+
+    hook = str(data.get("hook") or "").strip()
+    cta = str(data.get("cta") or "").strip()
     if not hook or not cta:
         raise ValueError("Gemini trả về nội dung rỗng")
 
@@ -256,6 +303,8 @@ async def auto_generate_hook_cta(
         # Gemini có thể trả về câu quá dài -> cắt bớt cho hợp lý
         result["hook_text"] = _first_sentences(result["hook_text"], 180) or base["hook_text"]
         result["cta_text"] = _first_sentences(result["cta_text"], 120) or base["cta_text"]
+        # ĐỢT 1: chống claim viral không có căn cứ (kể cả khi do Gemini sinh)
+        result["hook_text"] = _sanitize_viral_claim(result["hook_text"])
         return result
     except Exception as e:
         print(f"[AutoHook] Gemini loi, dung template noi bo: {e}")

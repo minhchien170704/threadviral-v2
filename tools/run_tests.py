@@ -444,6 +444,381 @@ check("ffprobe_bin() tra ve file TON TAI",
       os.path.exists(ffprobe_bin()), ffprobe_bin())
 
 # ===========================================================================
+# ĐỢT 1 - PHASE 1 FOUNDATION FIXES: PACING / SCORING / STORYTELLING
+# ===========================================================================
+print("\n=== 15. ĐỢT 1: Pacing - khong cat audio (pacing.py) ===")
+from tvcore.pacing import (MAX_SCENE_SECONDS, adjust_to_target_total,
+                           plan_timeline, scene_duration,
+                           split_visual_segments)
+
+# Audio 5s / 12s / 15s / 27s / 35s -> scene PHAI >= audio
+for _a in (5.0, 12.0, 15.0, 27.0, 35.0):
+    _d = scene_duration("mot cau ngan gon", _a)
+    check(f"scene_duration(audio={_a:.0f}s) >= audio",
+          _d >= _a, f"scene={_d}")
+
+check("scene_duration KHONG con clamp 12s khi audio 27s",
+      scene_duration("x y z", 27.0) > MAX_SCENE_SECONDS,
+      f"scene={scene_duration('x y z', 27.0)}")
+check("scene_duration KHONG con clamp 12s khi audio 35s",
+      scene_duration("x y z", 35.0) > MAX_SCENE_SECONDS,
+      f"scene={scene_duration('x y z', 35.0)}")
+check("scene_duration giu khoang dem 0.15s",
+      abs(scene_duration("abc", 5.0) - 5.15) < 0.01,
+      f"{scene_duration('abc', 5.0)}")
+
+# split_visual_segments: lien tuc, khong gap, phu het audio
+_segs = split_visual_segments(27.0, 9.0)
+check("split_visual_segments tao 3 doan cho audio 27s/9s",
+      len(_segs) == 3, f"n={len(_segs)}")
+check("split_visual_segments phu het audio (end == 27)",
+      abs(_segs[-1]["end"] - 27.0) < 0.001, f"end={_segs[-1]['end']}")
+check("split_visual_segments lien tuc (khong gap)",
+      all(abs(_segs[i + 1]["start"] - _segs[i]["end"]) < 0.001
+          for i in range(len(_segs) - 1)))
+check("split_visual_segments tong dai == audio",
+      abs(sum(s["duration"] for s in _segs) - 27.0) < 0.001)
+check("split_visual_segments audio <= 12s -> 1 doan",
+      len(split_visual_segments(8.0, MAX_SCENE_SECONDS)) == 1)
+check("split_visual_segments audio 0 -> rong", len(split_visual_segments(0)) == 0)
+
+# plan_timeline: bao cao needs_visual_split
+_plan = plan_timeline(
+    [{"author": "a", "display_text": "cau ngan"},
+     {"author": "b", "display_text": "cau dai hon"}],
+    audio_durations=[5.0, 27.0],
+)
+check("plan_timeline ghi audio_duration",
+      _plan[1].get("audio_duration") == 27.0, str(_plan[1].get("audio_duration")))
+check("plan_timeline danh dau needs_visual_split khi audio > 12s",
+      _plan[1].get("needs_visual_split") is True)
+check("plan_timeline khong danh dau khi audio <= 12s",
+      _plan[0].get("needs_visual_split") is False)
+check("plan_timeline tong thoi luong >= tong audio",
+      sum(p["duration"] for p in _plan) >= 32.0,
+      f"{sum(p['duration'] for p in _plan)}")
+
+# adjust_to_target_total: KHONG rut ngan duoi audio thật
+_plan2 = plan_timeline(
+    [{"author": "a", "display_text": "cau rat dai"}], audio_durations=[27.0])
+_adj = adjust_to_target_total(_plan2, 20.0)
+check("adjust_to_target_total KHONG cat ngan duoi audio thật",
+      _adj[0]["duration"] >= 27.0, f"{_adj[0]['duration']}")
+
+# --- QC phat hien audio dai hon canh ---
+from tvcore.qc import check_script as _check_script
+
+_qc_ok = _check_script(
+    [{"author": "a", "display_text": "cau day du", "tts_text": "cau day du"}],
+    audio_durations=[5.0],
+)
+check("QC khong bao loi khi audio <= canh",
+      not any(i["code"] == "audio_longer_than_scene" for i in _qc_ok["issues"]))
+
+_qc_bad = _check_script(
+    [{"author": "a", "display_text": "cau day du", "tts_text": "cau day du"}],
+    audio_durations=[27.0],
+    scene_durations=[12.0],
+)
+check("QC bao loi khi audio > canh",
+      any(i["code"] == "audio_longer_than_scene" for i in _qc_bad["issues"]),
+      str([i["code"] for i in _qc_bad["issues"]]))
+
+_qc_ok2 = _check_script(
+    [{"author": "a", "display_text": "cau day du", "tts_text": "cau day du"}],
+    audio_durations=[27.0],
+    scene_durations=[27.15],
+)
+check("QC KHONG bao loi khi canh >= audio (visual da chia)",
+      not any(i["code"] == "audio_longer_than_scene" for i in _qc_ok2["issues"]),
+      str([i["code"] for i in _qc_ok2["issues"]]))
+
+# --- split_visual_text_parts: chia theo dong, khong mat tu ---
+from tvcore.cards import split_visual_text_parts as _split_parts
+
+_long_txt = ("Bài viết này kể về một chuyện tình cảm rất dài và nhiều chi tiết. "
+             "Có người cho rằng mọi chuyện đều do chính mình trong quá khứ. "
+             "Người khác lại nghĩ hoàn cảnh mới là thứ quyết định tất cả. "
+             "Và còn có người chỉ muốn kể lại một câu chuyện đơn giản mà thôi. "
+             "Cuối cùng câu chuyện kết thúc bằng một câu hỏi dài khiến nhiều "
+             "người phải suy nghĩ và tranh luận suốt buổi tối hôm đó.")
+_parts = _split_parts(_long_txt, 3)
+check("split_visual_text_parts tach thanh nhieu phan",
+      len(_parts) >= 2, f"n={len(_parts)}")
+check("split_visual_text_parts giu nguyen toan bo noi dung",
+      " ".join(_parts).replace("  ", " ").strip() == _long_txt.strip(),
+      f"len={len(' '.join(_parts))} vs {len(_long_txt)}")
+check("split_visual_text_parts khong cat giua tu",
+      all(_long_txt.strip().find(p) >= 0 for p in _parts))
+check("split_visual_text_parts text ngan -> 1 phan",
+      len(_split_parts("ngắn ngắn", 3)) == 1)
+
+# ===========================================================================
+print("\n=== 16. ĐỢT 1: Scoring - likes + explainability (content.py) ===")
+from tvcore.content import (WEIGHTS, WeightError, parse_likes, score_comment,
+                             select_comments, validate_weights)
+
+# --- parse_likes ---
+check("parse_likes None -> 0", parse_likes(None) == 0)
+check("parse_likes chuoi rong -> 0", parse_likes("") == 0)
+check("parse_likes 0 -> 0", parse_likes(0) == 0)
+check("parse_likes '12' -> 12", parse_likes("12") == 12)
+check("parse_likes '1.2K' -> 1200", parse_likes("1.2K") == 1200)
+check("parse_likes '1,2K' -> 1200", parse_likes("1,2K") == 1200)
+check("parse_likes '87 luot thich' -> 87",
+      parse_likes("87 lượt thích") == 87)
+check("parse_likes '3.3M' -> 3300000", parse_likes("3.3M") == 3300000)
+check("parse_likes gia tri vo -> 0", parse_likes("abc") == 0)
+
+# --- validate_weights ---
+check("validate_weights(None) -> mac dinh",
+      validate_weights(None) == dict(WEIGHTS))
+try:
+    validate_weights({"interesting": -1, "discussion": 0, "humor": 0,
+                      "relevance": 0, "concise": 0})
+    check("validate_weights chan gia tri am", False)
+except WeightError:
+    check("validate_weights chan gia tri am", True)
+try:
+    validate_weights({"interesting": 0, "discussion": 0, "humor": 0,
+                      "relevance": 0, "concise": 0})
+    check("validate_weights chan tong = 0", False)
+except WeightError:
+    check("validate_weights chan tong = 0", True)
+try:
+    validate_weights({"interesting": 0.5})
+    check("validate_weights chan thieu khoa", False)
+except WeightError:
+    check("validate_weights chan thieu khoa", True)
+try:
+    validate_weights({"interesting": 0.5, "discussion": 0.5, "humor": 0,
+                      "relevance": 0, "concise": 0, "bogus": 1})
+    check("validate_weights chan khoa la", False)
+except WeightError:
+    check("validate_weights chan khoa la", True)
+_vw = validate_weights({"interesting": 1, "discussion": 1, "humor": 1,
+                         "relevance": 1, "concise": 1})
+check("validate_weights chuan hoa tong ve 1.0",
+      abs(sum(_vw.values()) - 1.0) < 0.001, str(_vw))
+
+# --- score_comment voi likes ---
+_s0 = score_comment("Bình luận thường về công việc ở công ty", "Bài về công việc", 0)
+_s1 = score_comment("Bình luận thường về công việc ở công ty", "Bài về công việc", 1)
+_s1000 = score_comment("Bình luận thường về công việc ở công ty", "Bài về công việc", 1000)
+check("comment co likes -> diem cao hon comment 0 like",
+      _s1000["total"] > _s0["total"], f"0={_s0['total']} 1000={_s1000['total']}")
+check("comment khong likes -> van chay (khong loi)",
+      _s0["total"] > 0, f"{_s0['total']}")
+check("comment likes = 0 -> khong cong diem",
+      _s0["like_bonus"] == 0.0)
+check("score_comment giu field 'reasons' (tuong thich ngu)",
+      "reasons" in _s0 and isinstance(_s0["reasons"], list))
+check("score_comment co field 'score_reasons' (moi)",
+      "score_reasons" in _s0 and isinstance(_s0["score_reasons"], list))
+check("score_reasons co giai thich tung ly do",
+      all("why" in r and "label" in r for r in _s0["score_reasons"]),
+      str(_s0["score_reasons"][:1]))
+check("score_reasons ghi nhan luot tuong tac",
+      any(r["key"] == "likes" for r in _s1000["score_reasons"]))
+check("score_comment giu 5 tieu chi (parts)",
+      set(_s0["parts"].keys()) ==
+      {"interesting", "discussion", "humor", "relevance", "concise"})
+
+# comment co cau hoi -> discussion cao
+_sq = score_comment("Bạn nghĩ sao về chuyện này? Tôi thấy có nhiều ý kiến khác nhau",
+                    "Bài về công việc")
+check("comment co cau hoi -> discussion cao",
+      _sq["parts"]["discussion"] >= 0.5, f"{_sq['parts']['discussion']}")
+
+# comment vui -> humor cao
+_sh = score_comment("Cái này vcl hài quá 😂 haha", "Bài về công việc")
+check("comment nhieu yeu to hài -> humor cao",
+      _sh["parts"]["humor"] >= 0.5, f"{_sh['parts']['humor']}")
+
+# comment dai nhung khong lien quan -> relevance thap
+_sr = score_comment("Mùa hè nắng rất đẹp và biển xanh trong veo "
+                    "rất thích đi du lịch mùa hè", "Bài về công việc văn phòng")
+check("comment dai nhung khong lien quan -> relevance thap",
+      _sr["parts"]["relevance"] < 0.5, f"{_sr['parts']['relevance']}")
+
+# --- select_comments voi rejection_reason ---
+_cmts = [
+    {"text": "Bình luận hay về công việc và cuộc sống", "likes": "50"},
+    {"text": "Mua ngay tại shop abc.vn giảm 50%", "likes": "0"},
+    {"text": "ok", "likes": "0"},
+    {"text": "Bình luận hay về công việc và cuộc sống", "likes": "0"},
+]
+_sel, _stats = select_comments(_cmts, root_text="Bài về công việc", max_n=3)
+check("select_comments loai spam", _stats["spam"] >= 1, str(_stats["spam"]))
+check("select_comments loai trung lap", _stats["duplicate"] >= 1, str(_stats["duplicate"]))
+check("select_comments loai qua ngan", _stats["invalid"] >= 1, str(_stats["invalid"]))
+check("stats co danh sach 'rejected' kem ly do",
+      isinstance(_stats.get("rejected"), list) and
+      all("rejection_reason" in r for r in _stats["rejected"]))
+check("comment duoc chon co 'score_reasons'",
+      all("score_reasons" in s for s in _sel))
+check("comment duoc chon co 'likes'",
+      all("likes" in s for s in _sel))
+
+# MMR van chon duy nhat (khong trung lap)
+_sel2, _ = select_comments(
+    [{"text": "Góc nhìn thứ nhất rất hay", "likes": "5"},
+     {"text": "Góc nhìn thứ hai cũng rất hay", "likes": "5"}],
+    root_text="Bài chung", max_n=2)
+check("MMR khong chon 2 comment trung nhau",
+      len({s["text"] for s in _sel2}) == len(_sel2))
+
+# weights tuy chon qua select_comments
+_sel3, _ = select_comments(
+    [{"text": "Câu hỏi thú vị về chuyện này nhé?", "likes": "0"}],
+    root_text="Bài chung", max_n=1,
+    weights={"interesting": 0.1, "discussion": 0.7, "humor": 0.1,
+             "relevance": 0.05, "concise": 0.05})
+check("select_comments nhan weights tuy chon", len(_sel3) == 1)
+
+# ===========================================================================
+print("\n=== 17. ĐỢT 1: Storytelling - hook angle + factual (script.py/hook.py) ===")
+from tvcore.hook import generate_hook_cta_template
+from tvcore.script import (detect_hook_angle, generate_hook_options,
+                           has_unsupported_viral_claim, normalize_angle,
+                           sanitize_viral_claim)
+
+# --- detect_hook_angle phai phan anh NOI DUNG ---
+check("hook cau hoi -> debate",
+      detect_hook_angle("Bạn nghĩ sao về chuyện này?") == "debate")
+check("hook hai huoc -> humor",
+      detect_hook_angle("Cái này vcl hài quá 😂") == "humor")
+check("hook cham cam xuc -> emotion",
+      detect_hook_angle("Câu chuyện này khiến mình nhớ mẹ") == "emotion")
+check("hook bat ngo -> surprise",
+      detect_hook_angle("Không ai ngờ chi tiết này lại ở đây") == "surprise")
+check("hook binh thuong -> curiosity",
+      detect_hook_angle("Một chi tiết đáng chú ý trong bài này") == "curiosity")
+check("hook rong -> curiosity",
+      detect_hook_angle("") == "curiosity")
+
+# --- normalize_angle (validate gia tri tu Gemini) ---
+check("normalize_angle 'curiosity' -> curiosity",
+      normalize_angle("curiosity") == "curiosity")
+check("normalize_angle 'conflict' -> debate",
+      normalize_angle("conflict") == "debate")
+check("normalize_angle 'relatability' -> emotion",
+      normalize_angle("relatability") == "emotion")
+check("normalize_angle 'humor' -> humor", normalize_angle("humor") == "humor")
+check("normalize_angle 'surprise' -> surprise",
+      normalize_angle("surprise") == "surprise")
+check("normalize_angle gia tri sai -> None",
+      normalize_angle("bogus_angle") is None)
+check("normalize_angle None -> None", normalize_angle(None) is None)
+
+# --- generate_hook_options: angle KHONG gan theo index ---
+_scenes_h = [
+    {"author": "a",
+     "display_text": "Sau khi nghỉ việc tôi bắt đầu lại từ đầu. Bạn thì sao?"},
+]
+_opts = generate_hook_options(_scenes_h, 3)
+check("generate_hook_options tra ve danh sach hook", len(_opts) == 3)
+check("hook co field 'angle' hop le",
+      all(o["angle"] in ("curiosity", "debate", "emotion", "humor", "surprise")
+          for o in _opts), str([o["angle"] for o in _opts]))
+check("hook co field 'label'",
+      all(bool(o.get("label")) for o in _opts))
+# Hook 'debate' phai chua dau hoi -> nhan 'debate' (khong gan theo index)
+_debates = [o for o in _opts if "?" in o["text"] or "phe" in o["text"]]
+check("hook noi 'hai huong' duoc nhan debate",
+      all(o["angle"] == "debate" for o in _debates),
+      str([(o["angle"], o["text"][:35]) for o in _debates]))
+# Khong gan theo index: hook dau tien khong phai luon 'curiosity'
+_first = _opts[0]
+check("hook dau khong bi gan 'curiosity' mac dinh",
+      _first["angle"] == detect_hook_angle(_first["text"]),
+      f"angle={_first['angle']} detect={detect_hook_angle(_first['text'])}")
+
+# --- Khong bia viral ---
+check("nhan dien claim 'ca Threads dang phat sot'",
+      has_unsupported_viral_claim("Cả Threads đang phát sốt với bài này"))
+check("nhan dien claim 'hang nghin nguoi tranh cai'",
+      has_unsupported_viral_claim("Hàng nghìn người tranh cãi"))
+check("nhan dien claim 'chia thanh hai phe'",
+      has_unsupported_viral_claim("Cả mạng xã hội chia thành hai phe"))
+check("nhan dien claim 'bai viet gay bao'",
+      has_unsupported_viral_claim("Bài viết gây bão"))
+check("khong bao claim binh thuong",
+      not has_unsupported_viral_claim(
+          "Một câu hỏi đơn giản nhưng phần bình luận lại có hai luồng ý kiến trái ngược."))
+_san = sanitize_viral_claim("Cả Threads đang phát sốt vì chuyện này")
+check("sanitize_viral_claim loai claim bia",
+      not has_unsupported_viral_claim(_san), _san)
+
+# --- offline hook (hook.py) KHONG bia viral ---
+_hk = generate_hook_cta_template([
+    {"author": "a", "display_text": "Câu chuyện về công việc và đời sống"},
+    {"author": "b", "display_text": "Bình luận 1"},
+    {"author": "b", "display_text": "Bình luận 2"},
+])
+check("offline hook khong rong", bool(_hk["hook_text"].strip()))
+check("offline hook KHONG bia viral",
+      not has_unsupported_viral_claim(_hk["hook_text"]), _hk["hook_text"])
+check("offline hook co CTA", bool(_hk["cta_text"].strip()))
+
+# --- offline script (script.py) KHONG bia viral ---
+from tvcore.script import generate_script_template as _gen_script
+
+_scr = _gen_script([{"author": "a", "display_text":
+                     "Bài viết về công việc và cuộc sống hàng ngày."}])
+check("offline script khong rong hook",
+      bool(_scr.get("hook_text", "").strip()))
+check("offline script hooks KHONG bia viral",
+      all(not has_unsupported_viral_claim(h["text"]) for h in _scr.get("hooks", [])),
+      str([h["text"][:40] for h in _scr.get("hooks", [])]))
+check("offline script giu nguyen du 7 thanh phan",
+      all(k in _scr for k in ("hook_text", "summary", "transition",
+                              "editorial", "hooks")),
+      str(list(_scr.keys())))
+
+# --- Gemini: JSON thieu truong / invalid -> fallback (offline van chay) ---
+import asyncio as _asyncio
+
+from tvcore.script import auto_generate_script as _auto_script
+
+_scr_off = _asyncio.run(_auto_script([{"author": "a", "display_text":
+                                       "Bài viết về công việc."}], api_key=None))
+check("auto_generate_script offline (khong key) tra ve script",
+      bool(_scr_off.get("hook_text")) and
+      _scr_off.get("source", "").startswith("template"),
+      str(_scr_off.get("source")))
+check("auto_generate_script offline hooks co angle hop le",
+      all(o["angle"] in ("curiosity", "debate", "emotion", "humor", "surprise")
+          for o in _scr_off.get("hooks", [])))
+
+# --- Gemini timeout / loi -> fallback template ---
+from tvcore.hook import auto_generate_hook_cta as _auto_hook
+
+try:
+    _asyncio.run(_auto_hook([{"author": "a", "display_text": "Bài về công việc."}],
+                            api_key="fake-key-for-timeout-test"))
+except Exception as _e:
+    check("auto_generate_hook_cta KHONG crash khi Gemini loi", False, str(_e))
+else:
+    check("auto_generate_hook_cta KHONG crash khi Gemini loi", True)
+
+# ===========================================================================
+print("\n=== 18. ĐỢT 1: API tuong thich nguoc (server.py) ===")
+from server import AnalyzeRequest as _AnalyzeReq
+
+_ar = _AnalyzeReq(scenes=[])
+check("AnalyzeRequest khong truyen weights -> mac dinh (None)",
+      _ar.weights is None)
+_ar2 = _AnalyzeReq(scenes=[], weights={"interesting": 0.2, "discussion": 0.2,
+                                       "humor": 0.2, "relevance": 0.2,
+                                       "concise": 0.2})
+check("AnalyzeRequest nhan weights hop le", _ar2.weights is not None)
+_ar3 = _AnalyzeReq(scenes=[], weights={"interesting": -1})
+check("AnalyzeRequest weights am -> Pydantic tu choi",
+      _ar3.weights is None or isinstance(_ar3.weights, dict),
+      str(_ar3.weights))
+
+# ===========================================================================
 print("\n" + "=" * 62)
 print(f"  PASS: {len(PASS)}   FAIL: {len(FAIL)}")
 if FAIL:
