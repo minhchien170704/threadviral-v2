@@ -15,6 +15,7 @@ Trọng số chấm điểm (có thể chỉnh qua WEIGHTS):
     độ thú vị 25% | gây thảo luận 25% | hài/bất ngờ 20% | liên quan 20% | ngắn gọn 10%
 """
 import re
+import math
 import unicodedata
 from difflib import SequenceMatcher
 from typing import Any, Dict, List, Optional, Sequence, Tuple
@@ -60,6 +61,20 @@ def strip_emoji(text: str) -> str:
     return _EMOJI_RE.sub(" ", text)
 
 
+def deaccent(text: str) -> str:
+    """
+    Bỏ dấu tiếng Việt: "tôi" -> "toi", "không" -> "khong".
+
+    Dùng để so khớp 2 chiều (dấu / không dấu) mà không cần viết 2 bản
+    danh sách từ dừng.
+    """
+    if not text:
+        return ""
+    t = unicodedata.normalize("NFD", text)
+    t = "".join(ch for ch in t if unicodedata.category(ch) != "Mn")
+    return unicodedata.normalize("NFC", t).lower()
+
+
 def normalize_text(text: str) -> str:
     """
     Chuẩn hoá để so khớp: bỏ emoji, hạ chữ thường, bỏ dấu câu,
@@ -85,8 +100,20 @@ def tokens(text: str) -> List[str]:
 
 
 def keyword_set(text: str) -> set:
-    """Tập từ khóa dùng cho đo độ tương đồng (bỏ từ dừng tiếng Việt)."""
-    return {w for w in tokens(text) if w not in STOPWORDS and len(w) > 1}
+    """
+    Tập từ khóa dùng cho đo độ tương đồng.
+
+    Từ dừng được so khớp ở dạng KHÔNG DẤU, nên không vấn đề bài viết
+    dùng "tôi" hay "toi" đều bị loại đúng.
+    """
+    out = set()
+    for w in tokens(text):
+        if len(w) <= 1:
+            continue
+        if deaccent(w) in STOPWORDS:
+            continue
+        out.add(w)
+    return out
 
 
 def count_words(text: str) -> int:
@@ -94,34 +121,68 @@ def count_words(text: str) -> int:
 
 
 # ---------------------------------------------------------------------------
-# Từ dừng tiếng Việt (rút gọn, đủ để lọc nhiễu)
+# Từ dừng tiếng Việt (KHÔNG DẤU - so khớp qua deaccent())
 # ---------------------------------------------------------------------------
 STOPWORDS = {
-    "va", "la", "co", "khong", "mot", "nhung", "cho", "de", "cua", "voi", "cung",
-    "thi", "roi", "bay", "gia", "nua", "hay", "bi", "deu", "ngay", "tu", "den",
-    "trong", "tren", "duoi", "ra", "vao", "boi", "vi", "ma", "nen", "neu", "thi",
-    "toi", "ban", "anh", "chi", "em", "minh", "chung", "ta", "no", "nen", "the",
-    "nhu", "ve", "tai", "day", "do", "di", "la", "mot", "roi", "them", "con",
-    "the", "khi", "tu", "den", "va", "khong", "co", "the", "nen", "ma", "thi",
-    "moi", "nguoi", "rat", "cung", "biet", "bi", "se", "nen", "de", "ve",
-    "a", "o", "u", "i", "y", "e", "la", "cac", "nhung", "khi", "sau", "truoc",
-    "nay", "day", "kia", "ai", "gi", "sao", "the", "nao", "ba", "gio", "luc",
-    "nen", "toi", "thoi", "roi", "nua", "loi", "viec", "nam", "nguoi", "khac",
+    # đại từ & liên từ
+    "toi", "ta", "ban", "anh", "chi", "em", "chung", "no", "minh", "con",
+    "nguoi", "nguoi", "ai", "gi", "gi", "do", "day", "kia", "nay", "luc",
+    # trợ động từ
+    "va", "la", "co", "khong", "mot", "nhung", "cho", "de", "cua", "voi",
+    "cung", "thi", "roi", "bay", "gia", "nua", "hay", "bi", "deu", "ngay",
+    "tu", "den", "trong", "tren", "duoi", "ra", "vao", "boi", "vi", "ma",
+    "nen", "neu", "the", "nhu", "ve", "tai", "di", "them", "con", "khi",
+    "moi", "rat", "biet", "se", "cac", "sau", "truoc", "sao", "nao", "ba",
+    "gio", "thoi", "loi", "viec", "nam", "khac", "nua", "roi", "nen",
+    # động từ thường dùng
+    "bi", "co", "khong", "muon", "can", "phai", "nen", "hay", "se",
+    "noi", "ca", "lam", "thay", "nen", "chua", "roi", "thi", "kinh",
+    "nghe", "thay", "nhin", "thich", "ghet", "yêu", "yêu",
+    # số từ & lượng từ
+    "mot", "hai", "ba", "bon", "nam", "muoi", "nhieu", "it", "nhieu hon",
+    # dấu câu đứng riêng (do tokenize tách ra)
+    "a", "o", "u", "i", "y", "e",
 }
 
 
 # ---------------------------------------------------------------------------
 # Spam / quảng cáo / vô nghĩa
+#
+# QUY TẮC: chỉ loại khi có DẤU HIỆU RÕ (cụm quảng cáo + ngữ cảnh liên hệ
+# / thanh toán), KHÔNG loại từ đơn. Nếu không, bình luận bình thường như
+# "giá nhà tăng quá" hay "mình mua được cái nhà rồi vui lắm" sẽ bị mất oan.
 # ---------------------------------------------------------------------------
-_SPAM_PATTERNS = [
-    r"\b(shop|shopee|lazada|tiktok shop|temu|amazon)\b",
-    r"\b(mua|ban|giá|sale|giảm giá|khuyến mãi|order|đặt hàng|ship)\b",
-    r"\b(link (in bio|trong bio)|in bio|follow (page|shop|em)\b)",
-    r"\b(khó học|kho hoc|crypto|forex|kiếm tiền|kiem tien|đầu tư tiền|đa cấp)\b",
-    r"\b(rút tiền|rut tien|nạp tiền|nap tien|kiếm tiền online)\b",
-    r"\b(like +follow|follow +like|lk +fl)\b",
+# Cụm quảng cáo - đủ dài để không trùng từ thường
+_SPAM_PHRASES = [
+    # mua bán trực tiếp + liên hệ / đặt hàng
+    r"(mua|ban|order|dat hang|ship)\s+(o|shop|hang|ngay|luon|ve|re|qua)\b.{0,20}"
+    r"\b(shop|inbox|ib|khach hang|so dt|number|contact|lien he|hotline|zalo)\b",
+    r"\b(shopee|lazada|tiktok shop|temu|amazon|aliexpress|shein)\b",
+    r"\b(discount|discount code|ma giam gia|code giam|free ship|ship free)\b",
+    r"\b(khuyen mai|chay hang|flash sale|black friday|dang giam gia)\b",
+    # lời rao quảng cáo rõ ràng
+    r"\b(shop em|shop moi|shop day|shop online|like +follow|follow +like|lk +fl)\b",
+    r"\b(link (in bio|trong bio)|in bio|them zalo|add zalo|nhan so dien thoai)\b",
+    # liên hệ / inbox trực tiếp -> dấu hiệu quảng cáo rõ
+    r"\b(khach hang|nguoi mua|nguoi can|ban mua)\b.{0,25}\b(inbox|ib|zalo|lien he|hotline|sdt)\b",
+    r"\b(inbox|add zalo|them zalo)\s+(em|toi|anh|chi|ban|minh)\b",
+    # lừa đảo / đầu tư
+    r"\b(kiem tien online|da cap|mlm|crypto|forex|bot trading|signal trading)\b",
+    r"\b(rut tien|nap tien|dau tu tien|huynh dong quang cao)\b",
+    # tuyển dụng quảng cáo
+    r"\b(tuyen dung|tuyển dụng|recruit|ung vien|apply ngay)\b.{0,30}\b(luon|ngay|luong)\b",
 ]
-_SPAM_RE = re.compile("|".join(_SPAM_PATTERNS), re.IGNORECASE)
+
+# Chỉ là từ đơn -> KHÔNG đủ để loại, dùng để cộng điểm nghi ngờ
+_SPAM_SOFT_WORDS = {
+    "shop", "mua", "ban", "sale", "inbox", "zalo", "lienhe", "hang",
+    "giamgia", "khuyenmai", "dat_hang", "ship",
+}
+
+_SPAM_RE = re.compile("|".join(_SPAM_PHRASES), re.IGNORECASE)
+_SPAM_SOFT_RE = re.compile(
+    r"\b(" + "|".join(_SPAM_SOFT_WORDS) + r")\b", re.IGNORECASE
+)
 
 _NONSENSE_RE = re.compile(r"^[\W\d_]+$")  # chỉ ký tự đặc biệt / số
 
@@ -226,8 +287,24 @@ _STORY_WORDS = {
 
 
 def _count_hits(text: str, word_set: set) -> int:
+    """
+    Đếm số cụm từ trong `word_set` xuất hiện trong `text`.
+
+    QUAN TRỌNG: so khớp theo RANH GIỚI TỪ, không dùng `w in low`.
+    Nếu dùng `in`, chuỗi "ex" sẽ khớp trong "next"/"text"/"context",
+    "vl" sẽ khớp trong "vlog"... -> phân loại chủ đề sai hoàn toàn.
+    """
     low = (text or "").lower()
-    return sum(1 for w in word_set if w in low)
+    if not low:
+        return 0
+    hits = 0
+    for w in word_set:
+        if not w:
+            continue
+        pattern = r"(?<!\w)" + re.escape(w.lower()) + r"(?!\w)"
+        if re.search(pattern, low):
+            hits += 1
+    return hits
 
 
 def _clamp01(v: float) -> float:
@@ -318,6 +395,20 @@ def score_comment(text: str, root_text: str = "", likes: int = 0) -> Dict[str, A
     }
     total = sum(parts[k] * WEIGHTS[k] for k in WEIGHTS)
 
+    # --- 6. Điểm cộng theo lượt thích (log-scale, tối đa +0.10) ---
+    # 0 like -> +0.00; 9 like -> ~+0.05; 999 like -> +0.09; 99 999 -> +0.10
+    # Dùng log để 1 bình luận viral không "giết" các bình luận còn lại.
+    like_bonus = 0.0
+    try:
+        n_likes = int(likes or 0)
+    except (TypeError, ValueError):
+        n_likes = 0
+    n_likes = max(0, n_likes)
+    if n_likes > 0:
+        like_bonus = min(0.10, 0.10 * (math.log10(n_likes + 1) / 4.0))
+
+    total = total + like_bonus
+
     reasons: List[str] = []
     if parts["discussion"] >= 0.6:
         reasons.append("gây thảo luận")
@@ -327,6 +418,8 @@ def score_comment(text: str, root_text: str = "", likes: int = 0) -> Dict[str, A
         reasons.append("có góc nhìn riêng")
     if parts["relevance"] >= 0.5:
         reasons.append("liên quan bài")
+    if like_bonus >= 0.05:
+        reasons.append("nhiều lượt thích")
 
     return {
         "total": round(total, 4),
@@ -334,6 +427,7 @@ def score_comment(text: str, root_text: str = "", likes: int = 0) -> Dict[str, A
         "reasons": reasons,
         "words": n_words,
         "chars": n_chars,
+        "like_bonus": round(like_bonus, 4),
     }
 
 
@@ -479,7 +573,7 @@ def classify_topic(text: str) -> Tuple[str, float]:
 
     scores = []
     for label, kws in TOPIC_CATEGORIES:
-        hits = sum(1 for k in kws if k in low)
+        hits = _count_hits(low, kws)
         if hits:
             scores.append((hits, label))
 

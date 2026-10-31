@@ -1,0 +1,22 @@
+# ==== Ghiền Đọc Comment - AI Video Maker v3.0 ====
+# Cài: pip install -r requirements.txt
+#      playwright install chromium
+
+# --- Web server ---
+fastapi>=0.110
+uvicorn[standard]>=0.27
+pydantic>=2.6
+python-multipart>=0.0.9
+
+# --- Scrape Threads ---
+playwright>=1.42
+
+# --- Text to speech ---
+edge-tts>=6.1
+
+# --- AI (optional - tool van chay offline neu thieu) ---
+google-genai>=1.0
+
+# --- Image / render ---
+Pillow>=10.2
+requests>=2.31

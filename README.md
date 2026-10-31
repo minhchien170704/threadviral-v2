@@ -87,22 +87,32 @@ pip install -r requirements.txt
 playwright install chromium
 ```
 
-Cần `ffmpeg` trong `bin/` hoặc trong `PATH`.
+Cần `ffmpeg` trong `bin/` hoặc trong `PATH`. Kiểm tra bằng:
+
+```bash
+ffmpeg -version
+```
+
+> **Ghi chú Windows:** dùng `Chay_ThreadViral_App.bat` (tự tạo venv + cài deps).
+> **Ghi chú Linux/macOS:** `python app_launcher.py` hoặc `python server.py` — ffmpeg phải có trong `PATH`.
 
 ## ▶️ Chạy
 
 ```bash
 python server.py          # http://127.0.0.1:8000
+# hoặc
+python app_launcher.py    # launcher tự kiểm tra môi trường
 ```
 
 ## 🧪 Test
 
 ```bash
-python tools/run_tests.py    # 106 unit test
+python tools/run_tests.py    # 132 unit test
 python tools/test_e2e.py     # 18 e2e test (scrape + render + ffprobe)
+python tools/verify_bugs.py  # bằng chứng cho 6 bug đã review
 ```
 
-**124/124 pass.**
+**150/150 pass.**
 
 ## 📦 API
 

@@ -15,6 +15,14 @@ from tvcore.cards import (draw_cta_card, draw_hook_card, draw_single_box,
                           safe_card_height, safe_card_width, wrap_like_card)
 from tvcore.config import SAFE_ZONE_BOTTOM, SAFE_ZONE_LEFT, SAFE_ZONE_RIGHT, SAFE_ZONE_TOP
 
+# Dam bao cac thu muc ban lam viec ton tai (outputs/, temp/, cache/...)
+# -> tranh loi crash khi clone repo moi va chay test ngay
+try:
+    from tvcore.config import ensure_dirs
+    ensure_dirs()
+except Exception as _e:  # pragma: no cover
+    print(f"[WARN] khong tao duoc thu muc ban lam viec: {_e}")
+
 PASS, FAIL = [], []
 
 
@@ -350,6 +358,79 @@ check("lưu preset thành công", _an.save_preset("test_preset", {"voice": "vi-V
 check("đọc lại preset", "test_preset" in _an.list_presets())
 check("xoá preset", _an.delete_preset("test_preset"))
 check("xoá preset đã xoá -> False", _an.delete_preset("test_preset") is False)
+
+# ===========================================================================
+# NHÓM 5: TEST HỒI QUY - 6 bug đã được review tái hiện
+print("\n=== 17. Test hoi quy (6 bug da review) ===")
+from pathlib import Path
+
+from tvcore.content import (classify_topic, deaccent, is_spam, keyword_set,
+                             score_comment, spam_reasons)
+
+# --- Bug 2: STOPWORDS khong bao gio khop ---
+kw = keyword_set("Tôi không biết của bạn là gì")
+check("stopwords loai 'toi'", "tôi" not in kw, str(kw))
+check("stopwords loai 'không'", "không" not in kw, str(kw))
+check("stopwords loai 'của'", "của" not in kw, str(kw))
+check("stopwords loai 'bạn'", "bạn" not in kw, str(kw))
+check("stopwords loai 'là'", "là" not in kw, str(kw))
+check("stopwords loai 'biết'", "biết" not in kw, str(kw))
+check("stopwords khop ca khi viet khong dau", "toi" not in keyword_set("toi la nguoi"),
+      str(keyword_set("toi la nguoi")))
+check("deaccent bo dau tieng Viet", deaccent("Tiếng Việt") == "tieng viet",
+      deaccent("Tiếng Việt"))
+
+# --- Bug 1: filter spam loai nham comment binh thuong ---
+for _c in ["giá nhà tăng quá trời luôn",
+           "mình mua được cái nhà rồi vui lắm",
+           "giá rẻ lắm, mẹ ơi"]:
+    check(f"spam KHONG loai '{_c}'", not is_spam(_c), str(spam_reasons(_c)))
+for _c in ["shop em oi inbox 09xx xxx xxx nha",
+           "mua ngay tai link in bio nha",
+           "khach hang inbox em nhe"]:
+    check(f"spam LOAI '{_c}'", is_spam(_c), str(spam_reasons(_c)))
+
+# --- Bug 4: substring matching ---
+_t, _c = classify_topic("next text context")
+check("classify_topic khong khop 'ex' trong 'next'",
+      _t != "tình yêu", f"{_t} ({_c})")
+_t2, _c2 = classify_topic("vlog vua len")
+check("classify_topic khong khop 'vl' trong 'vlog'",
+      _t2 != "tình yêu", f"{_t2} ({_c2})")
+_t3, _c3 = classify_topic("tôi vừa chia tay bạn trai, tình yêu thật sự rất đẹp")
+check("classify_topic van nhan 'tình yêu' that",
+      _t3 == "tình yêu", f"{_t3} ({_c3})")
+_t4, _c4 = classify_topic("next text context")
+check("classify_topic 'next text context' khong phai tinh yeu",
+      _t4 != "tình yêu", f"{_t4} ({_c4})")
+
+# --- Bug 4b: likes ---
+_l0 = score_comment("Mình nghĩ thế này", likes=0)["total"]
+_l99 = score_comment("Mình nghĩ thế này", likes=99)["total"]
+_l999 = score_comment("Mình nghĩ thế này", likes=999999)["total"]
+check("likes 0 van co diem > 0", _l0 > 0, f"{_l0}")
+check("likes anh huong diem (0 like < 99 like)", _l0 < _l99, f"0={_l0} 99={_l99}")
+check("likes khong vuot qua tran +0.10", _l999 <= _l0 + 0.1001, f"0={_l0} big={_l999}")
+
+# --- Bug 5: Pydantic field_validator ---
+from server import RenderRequest, SceneItem
+
+_s = SceneItem(display_text="x" * 5000, tts_text="y" * 5000)
+check("SceneItem cat display_text qua dai", len(_s.display_text) <= 2000,
+      f"len={len(_s.display_text)}")
+check("SceneItem cat tts_text qua dai", len(_s.tts_text) <= 2000,
+      f"len={len(_s.tts_text)}")
+_r = RenderRequest(scenes=[], resolution="abc")
+check("RenderRequest resolution sai -> mac dinh", _r.resolution == "1080x1920",
+      _r.resolution)
+_r2 = RenderRequest(scenes=[], resolution="720x1280")
+check("RenderRequest resolution hop le giu nguyen", _r2.resolution == "720x1280",
+      _r2.resolution)
+
+# --- Bug 1b: ensure_dirs ---
+check("ensure_dirs() tao thu muc 'temp'",
+      (Path(__file__).resolve().parent.parent / "temp").exists(),
+      str(Path(__file__).resolve().parent.parent / "temp"))
 
 # ===========================================================================
 print("\n" + "=" * 62)

@@ -14,6 +14,7 @@ Cấu trúc:
 """
 import asyncio
 import os
+import shutil
 import sys
 from typing import List, Optional
 
@@ -107,9 +108,25 @@ class SceneItem(BaseModel):
     meme_file: Optional[str] = None
 
     # Bổ sung: validate độ dài để tránh payload quá lớn
+    @field_validator("display_text", "tts_text", mode="before")
     @classmethod
-    def _validate_text(cls, v: Optional[str]) -> Optional[str]:
-        if v is not None and len(v) > MAX_DISPLAY_CHARS:
+    def _validate_text(cls, v):
+        """Cắt bớt text quá dài (MAX_DISPLAY_CHARS) để tránh payload lớn."""
+        if v is None:
+            return v
+        v = str(v)
+        if len(v) > MAX_DISPLAY_CHARS:
+            return v[:MAX_DISPLAY_CHARS]
+        return v
+
+    @field_validator("reply_display_text", "reply_tts_text", mode="before")
+    @classmethod
+    def _validate_reply_text(cls, v):
+        """Giới hạn độ dài cho phần reply (nếu có)."""
+        if v is None:
+            return v
+        v = str(v)
+        if len(v) > MAX_DISPLAY_CHARS:
             return v[:MAX_DISPLAY_CHARS]
         return v
 
@@ -201,8 +218,10 @@ class RenderRequest(BaseModel):
     zoom_effect: bool = True            # hiệu ứng zoom nhẹ
     skip_qc: bool = False               # bỏ qua kiểm tra chất lượng
 
+    @field_validator("resolution", mode="before")
     @classmethod
     def _check(cls, v):
+        """Chỉ chấp nhận resolution có trong RESOLUTIONS, sai thì về mặc định."""
         if v not in RESOLUTIONS:
             return "1080x1920"
         return v
@@ -778,10 +797,23 @@ async def api_discover_posts(req: DiscoverRequest):
 # ==========================================
 @app.get("/api/health")
 async def health():
+    """
+    Kiểm tra sức khoẻ hệ thống.
+
+    `ffmpeg`: tìm bằng shutil.which() để hoạt động trên Windows / Linux / macOS
+    (thay vì chỉ đoán đường dẫn `bin/ffmpeg.exe` chỉ đúng trên Windows).
+    """
+    ffmpeg_path = shutil.which("ffmpeg") or ""
+    if not ffmpeg_path:
+        # fallback: thư mục bin/ kèm theo repo (Windows-style)
+        local = APP_ROOT / "bin" / ("ffmpeg.exe" if os.name == "nt" else "ffmpeg")
+        if local.exists():
+            ffmpeg_path = str(local)
     return {
         "status": "ok",
         "version": app.version,
-        "ffmpeg": os.path.exists(os.path.join(str(APP_ROOT / "bin"), "ffmpeg.exe")),
+        "ffmpeg": bool(ffmpeg_path),
+        "ffmpeg_path": ffmpeg_path or None,
         "outputs": len(_list_files(str(OUTPUTS_DIR), (".mp4",))),
     }
 
