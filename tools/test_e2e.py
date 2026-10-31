@@ -26,6 +26,17 @@ FFMPEG = os.path.join("bin", "ffmpeg.exe")
 if not os.path.exists(FFMPEG):
     FFMPEG = "ffmpeg"
 
+# Dung dung utils de co fallback PATH (bug: duong dan cung khong ton tai
+# o ban clone sach tu GitHub -> FileNotFoundError)
+try:
+    from tvcore.utils import ffmpeg_bin, ffprobe_bin
+    FFMPEG = ffmpeg_bin()
+    FFPROBE = ffprobe_bin()
+except Exception:
+    FFPROBE = os.path.join("bin", "ffprobe.exe")
+    if not os.path.exists(FFPROBE):
+        FFPROBE = "ffprobe"
+
 
 def ok(name, cond, detail=""):
     print(f"  [{'PASS' if cond else 'FAIL'}] {name}" + (f" - {detail}" if detail else ""))
@@ -90,7 +101,7 @@ async def main():
 
     # ---- 3. Probe video ----
     print("\n=== 3. Thong so video ===")
-    ffprobe = os.path.join("bin", "ffprobe.exe")
+    ffprobe = FFPROBE
     cmd = [ffprobe, "-v", "error", "-select_streams", "v:0",
            "-show_entries", "stream=width,height,r_frame_rate,codec_name,pix_fmt",
            "-show_entries", "format=duration", "-of", "json", vid]
