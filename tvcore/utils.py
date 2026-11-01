@@ -303,6 +303,8 @@ SCENE_FIELDS = (
     "reply_author", "reply_display_text", "reply_tts_text",
     "avatar_url", "likes", "comments", "reposts", "shares",
     "author_liked", "meme_file",
+    # PHASE 1.2: danh sach URL anh bai viet (thu tu goc)
+    "images",
 )
 
 
@@ -325,4 +327,14 @@ def scene_to_dict(scene) -> dict:
     out.setdefault("author_liked", True)
     if out.get("author_liked") is None:
         out["author_liked"] = True
+    # PHASE 1.2: chuan hoa `images` -> list URL (tuong thich nguoi)
+    imgs = out.get("images")
+    if imgs is None:
+        out["images"] = []
+    elif isinstance(imgs, str):
+        out["images"] = [imgs] if imgs.strip() else []
+    elif isinstance(imgs, (list, tuple)):
+        out["images"] = [str(u).strip() for u in imgs if isinstance(u, str) and u.strip()]
+    else:
+        out["images"] = []
     return out

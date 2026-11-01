@@ -11,6 +11,7 @@ from typing import Any, Dict, List
 from playwright.async_api import async_playwright
 
 from .content import select_comments
+from .images import dedupe_images, is_allowed_image_url, pick_best_srcset
 from .tts import local_slang_to_tts
 
 # ---------------------------------------------------------------------------
@@ -164,6 +165,32 @@ def parse_threads_container(lines: List[str], default_author: str = "",
 
 
 # ---------------------------------------------------------------------------
+# PHASE 1.2: Trích xuất ảnh bài viết
+# ---------------------------------------------------------------------------
+def _extract_image_urls(raw_images: List[Dict[str, Any]]) -> List[str]:
+    """
+    Chuyển danh sách ảnh thô từ DOM thành list URL ảnh hợp lệ.
+
+    - Ưu tiên biến thể LỚN NHẤT trong `srcset` (render 9:16 không vỡ nét).
+    - Chỉ giữ URL từ host được allowlist (chống SSRF / nguồn lạ).
+    - Loại trùng nhưng GIỮ NGUYÊN THỨ TỰ gốc của bài viết.
+    - KHÔNG tự tạo/đoán URL.
+    """
+    out: List[str] = []
+    for item in raw_images or []:
+        if not isinstance(item, dict):
+            continue
+        url = pick_best_srcset(item.get("srcset"))
+        if not url:
+            src = (item.get("src") or "").strip()
+            url = src if is_allowed_image_url(src) else ""
+        if not url:
+            continue
+        out.append(url)
+    return dedupe_images(out)
+
+
+# ---------------------------------------------------------------------------
 # Cache trong bộ nhớ
 # ---------------------------------------------------------------------------
 _SCRAPE_CACHE: Dict[str, Any] = {}
@@ -303,6 +330,31 @@ async def scrape_threads_post(url: str, max_comments: int = 7) -> List[dict]:
                             avatarUrl = src; break;
                         }
                     }
+                    // --- PHASE 1.2: ANH BAI VIET ---
+                    // Anh bai viet cua Threads nam trong the <picture>.
+                    // KHONG nam trong <picture>: avatar (alt="...profile picture"),
+                    // poster/thumbnail cua video, anh bia nho.
+                    // Thu thu ANH THEO THU TU DOM (carousel ngang -> dung thu tu
+                    // goc cua bai viet).
+                    const images = [];
+                    const seenSrc = new Set();
+                    for (const pic of c.querySelectorAll('picture')) {
+                        const im = pic.querySelector('img');
+                        if (!im) continue;
+                        const alt = (im.getAttribute('alt') || '').toLowerCase();
+                        if (alt.includes('profile picture')) continue;
+                        const raw = im.getAttribute('src') || '';
+                        const srcset = im.getAttribute('srcset') || '';
+                        const key = (im.currentSrc || raw || '').split('?')[0];
+                        if (!key || seenSrc.has(key)) continue;
+                        seenSrc.add(key);
+                        images.push({
+                            src: raw,
+                            srcset: srcset,
+                            w: im.naturalWidth || 0,
+                            h: im.naturalHeight || 0,
+                        });
+                    }
                     const timeEl = c.querySelector('time');
                     const timeAgo = timeEl ? (timeEl.innerText.trim() || timeEl.getAttribute('datetime')) : "";
                     // Badge "Da xac minh" (tick xanh) cua Threads.
@@ -317,7 +369,7 @@ async def scrape_threads_post(url: str, max_comments: int = 7) -> List[dict]:
                         if (/xác minh|verified/i.test(lb)) { isVerified = true; break; }
                     }
                     const lines = ownText(c);
-                    return { idx, author, avatarUrl, timeAgo, isVerified, lines };
+                    return { idx, author, avatarUrl, timeAgo, isVerified, lines, images };
                 });
             }''')
 
@@ -339,6 +391,8 @@ async def scrape_threads_post(url: str, max_comments: int = 7) -> List[dict]:
                 p_item["avatar_url"] = item["avatarUrl"]
                 p_item["is_verified"] = bool(item.get("isVerified"))
                 p_item["raw_lines"] = item["lines"]
+                # PHASE 1.2: ảnh bài viết (giữ thứ tự gốc)
+                p_item["images"] = _extract_image_urls(item.get("images") or [])
                 parsed_items.append(p_item)
 
             if not parsed_items:
@@ -363,6 +417,8 @@ async def scrape_threads_post(url: str, max_comments: int = 7) -> List[dict]:
                 "reply_display_text": None,
                 "reply_tts_text": None,
                 "reply_author": None,
+                # PHASE 1.2: ảnh bài viết (list URL, thứ tự gốc)
+                "images": list(root_post.get("images") or []),
             }]
 
             # ------------------------------------------------------------------
@@ -428,6 +484,8 @@ async def scrape_threads_post(url: str, max_comments: int = 7) -> List[dict]:
                     "reply_display_text": None,
                     "reply_tts_text": None,
                     "reply_author": None,
+                    # PHASE 1.2: ảnh bài viết (list URL, thứ tự gốc)
+                    "images": list(it.get("images") or []),
                 })
 
                 # Gắn reply của tác giả (nếu có) vào cảnh này

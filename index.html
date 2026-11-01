@@ -553,6 +553,14 @@
             <p id="prevReplyText" class="text-xs text-slate-900 pl-11 font-medium"></p>
           </div>
 
+          <div id="prevImageBox" class="hidden w-full mt-1">
+            <div class="flex items-center justify-between mb-1">
+              <span class="text-[10px] text-sky-300 font-semibold uppercase">🖼 Ảnh bài viết</span>
+              <span id="prevImageCount" class="text-[10px] text-slate-400"></span>
+            </div>
+            <div id="prevImageStrip" class="flex gap-2 overflow-x-auto pb-1"></div>
+          </div>
+
           <div class="mt-4 w-full bg-black/70 backdrop-blur rounded-xl p-2.5 border border-white/10">
             <div class="text-[10px] text-amber-400 font-semibold uppercase">🔊 Giọng AI sẽ đọc là:</div>
             <p id="prevTtsText" class="text-[11px] text-slate-200 mt-0.5 italic"></p>
@@ -973,6 +981,27 @@
         $("prevReplyText").innerText = sc.reply_display_text;
       } else {
         replyBox.classList.add("hidden");
+      }
+
+      // PHASE 1.2: preview ảnh bài viết (nhiều ảnh -> hiển thị theo thứ tự)
+      const imgBox = $("prevImageBox");
+      const strip = $("prevImageStrip");
+      const imgs = Array.isArray(sc.images) ? sc.images.filter(u => typeof u === "string" && u.trim()) : [];
+      if (imgs.length) {
+        imgBox.classList.remove("hidden");
+        $("prevImageCount").innerText = imgs.length + " ảnh";
+        strip.innerHTML = imgs.map((u, i) => `
+          <div class="relative shrink-0">
+            <img src="${escapeHtml(u)}" alt="Ảnh ${i + 1}"
+                 class="w-16 h-16 object-cover rounded-lg border border-slate-600 bg-slate-800"
+                 onerror="this.style.display='none'" />
+            <span class="absolute bottom-0 right-0 bg-black/70 text-[9px] px-1 rounded">${i + 1}</span>
+          </div>
+        `).join("");
+      } else {
+        imgBox.classList.add("hidden");
+        strip.innerHTML = "";
+        $("prevImageCount").innerText = "";
       }
     }
 

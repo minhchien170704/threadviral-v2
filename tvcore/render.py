@@ -27,7 +27,9 @@ from .cards import (
     safe_overlay_y, scale_for, split_visual_text_parts,
 )
 from .content import select_comments
-from .pacing import MAX_SCENE_SECONDS, plan_visual_slices, scene_duration
+from .pacing import (
+    MAX_SCENE_SECONDS, plan_image_slices, plan_visual_slices, scene_duration,
+)
 from .qc import check_script, check_video
 from .tts import local_slang_to_tts, make_tts_audio
 from .utils import (
@@ -140,6 +142,61 @@ def _insert_script_scenes(
 
 async def _noop(pct: float, msg: str) -> None:
     pass
+
+
+# ---------------------------------------------------------------------------
+# PHASE 1.2: Tải ảnh bài viết cho các scene
+# ---------------------------------------------------------------------------
+async def _download_scene_images(
+    scenes_meta: List[dict],
+    job_id: str,
+    temp_files: List[str],
+) -> None:
+    """
+    Tải ảnh bài viết cho MỌI scene, ghi kết quả vào `meta["image_paths"]`.
+
+    Nguyên tắc:
+      - Ảnh lỗi (404 / timeout / sai định dạng / quá lớn) -> bỏ qua,
+        KHÔNG làm hỏng video.
+      - Giữ nguyên thứ tự ảnh gốc trong `image_paths`.
+      - Không tải ảnh cho scene hook/CTA/narrator (không có ảnh bài viết).
+    """
+    from .images import prepare_images_async
+
+    tasks = []
+    for meta in scenes_meta:
+        sc = meta["scene"]
+        author = sc.get("author") or ""
+        if author in ("__hook__", "__cta__", "__narr__"):
+            meta["image_paths"] = []
+            continue
+        urls = [u for u in (sc.get("images") or []) if isinstance(u, str) and u.strip()]
+        meta["image_paths"] = []
+        if not urls:
+            continue
+        dest_dir = str(TEMP_DIR / "images")
+        tasks.append((meta, urls, dest_dir))
+
+    if not tasks:
+        return
+
+    results = await asyncio.gather(
+        *[
+            prepare_images_async(urls, f"{job_id}_s{meta['idx']}", dest_dir)
+            for meta, urls, dest_dir in tasks
+        ],
+        return_exceptions=True,
+    )
+
+    for (meta, _urls, _dd), res in zip(tasks, results):
+        if isinstance(res, BaseException):
+            meta["image_paths"] = []
+            continue
+        paths = list(res or [])
+        meta["image_paths"] = paths
+        for pth in paths:
+            if pth not in temp_files:
+                temp_files.append(pth)
 
 
 # ---------------------------------------------------------------------------
@@ -321,6 +378,13 @@ async def render_video(req, progress: ProgressFn = None) -> dict:
                 "a2_path": a2_path, "c2_path": c2_path,
             })
 
+        # ============ PHASE 1.2: TAI ANH BAI VIET ============
+        # Anh duoc tai SONG SONG cho tat ca scene (nhanh), truoc khi tao card.
+        # - Anh loi -> bi bo qua, video van render binh thuong.
+        # - File tam duoc ghi vao temp_files -> duoc don trong `finally`.
+        await _safe_progress(p, 0.04, "Đang tải ảnh bài viết...")
+        await _download_scene_images(scenes_meta, job_id, temp_files)
+
         # Tạo TTS TUẦN TỰ (không song song).
         # edge-tts bị throttle khi có nhiều request cùng lúc -> sinh ra file
         # im lặng -> giọng đọc "loạn" và lệch với hình ảnh.
@@ -430,6 +494,10 @@ async def render_video(req, progress: ProgressFn = None) -> dict:
                 is_root = (meta["idx"] == 0)
                 if scenes and scenes[0]["author"] == "__hook__":
                     is_root = (meta["idx"] == 1)
+                # PHASE 1.2: anh bai viet (neu co). File local da tai san.
+                _imgs = meta.get("image_paths") or []
+                _img0 = _imgs[0] if _imgs else None
+                _badge0 = f"1/{len(_imgs)}" if len(_imgs) > 1 else ""
                 box1_img = draw_single_box(
                     sc["author"], sc["time_ago"], sc["display_text"], sc.get("avatar_url"),
                     sc.get("likes", ""), sc.get("comments", ""), sc.get("reposts", ""),
@@ -437,6 +505,7 @@ async def render_video(req, progress: ProgressFn = None) -> dict:
                     show_footer=(not meta["has_reply"]), is_root_post=is_root,
                     scale=card_scale, vid_w=vid_w, vid_h=vid_h,
                     is_verified=bool(sc.get("is_verified")),
+                    image_path=_img0, image_badge=_badge0,
                 )
             box1_img.save(meta["c1_path"], "PNG")
 
@@ -483,7 +552,11 @@ async def render_video(req, progress: ProgressFn = None) -> dict:
                 if not _text_parts or not any(p.strip() for p in _text_parts):
                     _text_parts = [(sc.get("display_text") or "")]
                 _n_text = len(_text_parts)
-                _plan_v = plan_visual_slices(dur1, _n_text, MAX_SCENE_SECONDS)
+                # PHASE 1.2: dam bao so visual >= so ANH, de moi anh co
+                # mot khoang thoi gian rieng va hien thi THEO THU TU GOC.
+                _n_img = len(meta.get("image_paths") or [])
+                _n_eff = max(_n_text, _n_img)
+                _plan_v = plan_visual_slices(dur1, _n_eff, MAX_SCENE_SECONDS)
                 _visual_segs = _plan_v["segments"]
                 _part_index = _plan_v["part_index"]
 
@@ -491,17 +564,34 @@ async def render_video(req, progress: ProgressFn = None) -> dict:
                 # Mỗi visual có 1 ảnh riêng (dùng lại ảnh nếu cùng phần text).
                 # Cache key = (phần text, có footer hay không) để visual CUỐI
                 # vẫn hiện footer dù chia sẻ ảnh với visual trước đó.
+                #
+                # PHASE 1.2: kèm ảnh bài viết -> mỗi visual hiển thị 1 ảnh,
+                # lần lượt theo THỨ TỰ GỐC (plan_image_slices).
+                _imgs_v = meta.get("image_paths") or []
+                _img_slices = plan_image_slices(len(_imgs_v), len(_visual_segs))
                 _img_cache: Dict[tuple, str] = {}
                 _last_part = _part_index[-1] if _part_index else 0
                 _did_split = True
                 for _vi, _seg in enumerate(_visual_segs):
                     _pi = _part_index[_vi] if _vi < len(_part_index) else _last_part
                     _want_footer = (_vi == len(_visual_segs) - 1 and not meta["has_reply"])
-                    _ck = (_pi, _want_footer)
+                    _ii = _img_slices[_vi] if _vi < len(_img_slices) else -1
+                    _vimg_path = _imgs_v[_ii] if (0 <= _ii < len(_imgs_v)) else None
+                    _vbadge = ""
+                    if _vimg_path and len(_imgs_v) > 1:
+                        _vbadge = f"{_ii + 1}/{len(_imgs_v)}"
+                    _ck = (_pi, _want_footer, _ii)
                     if _ck in _img_cache:
                         _vp = _img_cache[_ck]
                     else:
-                        _vp = f"{meta['c1_path']}.v{_pi}{'f' if _want_footer else ''}.png"
+                        # PHASE 1.2: ten file PHAI giong ca chi so anh (_ii).
+                        # Truoc day ten file chi dua tren phan text (_pi) -> khi
+                        # nhieu anh dung chung mot phan text (vi du 7 anh, text
+                        # ngan -> 1 phan) thi TAT CA visual ghi de cung mot
+                        # file -> anh cuoi cung thang lai, THU TU ANH SAI.
+                        _vp = (f"{meta['c1_path']}.v{_pi}"
+                               f"{'f' if _want_footer else ''}"
+                               f"i{_ii}.png")
                         _tp = _text_parts[_pi] if _pi < len(_text_parts) else _text_parts[-1]
                         # Stats chỉ hiện ở visual đầu; footer ở visual cuối.
                         _vimg = draw_single_box(
@@ -515,6 +605,7 @@ async def render_video(req, progress: ProgressFn = None) -> dict:
                             is_root_post=_is_root_v,
                             scale=card_scale, vid_w=vid_w, vid_h=vid_h,
                             is_verified=bool(sc.get("is_verified")),
+                            image_path=_vimg_path, image_badge=_vbadge,
                         )
                         _vimg.save(_vp, "PNG")
                         temp_files.append(_vp)

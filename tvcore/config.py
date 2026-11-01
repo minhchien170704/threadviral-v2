@@ -79,6 +79,7 @@ MAX_UPLOAD_BYTES = 200 * 1024 * 1024       # 200 MB mỗi file upload
 MAX_SCENES = 40                            # số cảnh tối đa trong 1 video
 MAX_DISPLAY_CHARS = 2000                   # độ dài tối đa của 1 câu
 MAX_RENDER_SECONDS = 600                   # video tối đa 10 phút
+MAX_IMAGES_PER_SCENE = 10                  # số ảnh tối đa cho 1 bài viết (Phase 1.2)
 
 # ---------------------------------------------------------------------------
 # Vùng an toàn nội dung (theo khung 1080x1920)

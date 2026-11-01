@@ -32,14 +32,15 @@ from tvcore.analytics import (delete_preset, get_stats, list_presets,
 from tvcore.cleanup import MAX_OUTPUT_VIDEOS, cleanup_old_videos, outputs_disk_usage_mb
 from tvcore.config import (
     APP_ROOT, AUDIO_EXTS, BG_EXTS, BGM_DIR, BACKGROUNDS_DIR, IMAGE_EXTS,
-    MAX_DISPLAY_CHARS, MAX_SCENES, MEME_EXTS, MEMES_DIR, OUTPUTS_DIR,
-    RESOLUTIONS, WORK_ROOT, ensure_dirs, ensure_ffmpeg_in_path,
+    MAX_DISPLAY_CHARS, MAX_IMAGES_PER_SCENE, MAX_SCENES, MEME_EXTS, MEMES_DIR,
+    OUTPUTS_DIR, RESOLUTIONS, WORK_ROOT, ensure_dirs, ensure_ffmpeg_in_path,
     ensure_playwright_browsers,
 )
 from tvcore.content import (
     WEIGHTS, WeightError, analyze_post, select_comments, validate_weights,
 )
 from tvcore.hook import auto_generate_hook_cta
+from tvcore.images import is_allowed_image_url
 from tvcore.pacing import plan_timeline
 from tvcore.qc import check_rights, check_script, check_video
 from tvcore.render import render_video
@@ -144,6 +145,10 @@ class SceneItem(BaseModel):
     author_liked: bool = True
     meme_file: Optional[str] = None
 
+    # PHASE 1.2: ảnh bài viết (URL). Thứ tự trong list là thứ tự gốc.
+    # Mặc định rỗng -> tương thích ngược với bài viết không có ảnh.
+    images: List[str] = Field(default_factory=list)
+
     # Bổ sung: validate độ dài để tránh payload quá lớn
     @field_validator("display_text", "tts_text", mode="before")
     @classmethod
@@ -155,6 +160,38 @@ class SceneItem(BaseModel):
         if len(v) > MAX_DISPLAY_CHARS:
             return v[:MAX_DISPLAY_CHARS]
         return v
+
+    @field_validator("images", mode="before")
+    @classmethod
+    def _validate_images(cls, v):
+        """
+        Chuẩn hoá danh sách URL ảnh.
+
+        - None -> [] (tương thích ngược).
+        - Bỏ qua phần tử không phải chuỗi.
+        - Chỉ giữ URL hợp lệ (http/https, host allowlist) -> chống việc gửi
+          URL độc hại tới server (SSRF) và giữ payload gọn.
+        - Giới hạn số ảnh + độ dài mỗi URL.
+        """
+        if v is None:
+            return []
+        if isinstance(v, str):
+            v = [v]
+        if not isinstance(v, (list, tuple)):
+            return []
+        out: List[str] = []
+        for item in v:
+            if not isinstance(item, str):
+                continue
+            url = item.strip()
+            if not url or len(url) > 2048:
+                continue
+            if not is_allowed_image_url(url):
+                continue
+            out.append(url)
+            if len(out) >= MAX_IMAGES_PER_SCENE:
+                break
+        return out
 
     @field_validator("reply_display_text", "reply_tts_text", mode="before")
     @classmethod

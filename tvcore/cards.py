@@ -216,6 +216,81 @@ def fetch_avatar_with_plus_badge(url: Optional[str], size: int = 76,
 # ---------------------------------------------------------------------------
 # Thẻ bình luận
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# PHASE 1.2: Vẽ ảnh bài viết vào card
+# ---------------------------------------------------------------------------
+def fit_image_contain(
+    img: Image.Image,
+    box_w: int,
+    box_h: int,
+    bg: tuple = (245, 246, 248, 255),
+) -> Image.Image:
+    """
+    Scale ảnh vào khung `box_w` x `box_h` theo kiểu CONTAIN.
+
+    - KHÔNG kéo méo tỷ lệ (giữ nguyên aspect ratio).
+    - Phần thừa được đệm bằng nền trung tính.
+    - Ảnh được bo tròn nhẹ cho đẹp.
+    """
+    box_w = max(1, int(box_w))
+    box_h = max(1, int(box_h))
+    src = img.convert("RGBA")
+    sw, sh = src.size
+    if sw <= 0 or sh <= 0:
+        return Image.new("RGBA", (box_w, box_h), bg)
+
+    scale = min(box_w / float(sw), box_h / float(sh))
+    nw = max(1, int(round(sw * scale)))
+    nh = max(1, int(round(sh * scale)))
+    resized = src.resize((nw, nh), Image.Resampling.LANCZOS)
+
+    canvas = Image.new("RGBA", (box_w, box_h), bg)
+    ox = (box_w - nw) // 2
+    oy = (box_h - nh) // 2
+    canvas.paste(resized, (ox, oy), resized)
+    return canvas
+
+
+def _img_probe(img_path: Optional[str]) -> Optional[Image.Image]:
+    """
+    Kiểm tra ảnh có đọc được không (mở + giải mã).
+    Trả None nếu lỗi -> caller bỏ qua ảnh (fallback an toàn).
+    """
+    from .images import load_local_image
+    return load_local_image(img_path)
+
+
+def draw_post_image(
+    img_path: str,
+    box_w: int,
+    box_h: int,
+    radius: int = 18,
+) -> Optional[Image.Image]:
+    """
+    Vẽ 1 ảnh bài viết vào khung (contain, không méo, bo góc).
+
+    Trả về None nếu ảnh không đọc được -> caller bỏ qua (fallback an toàn).
+    """
+    from .images import load_local_image
+
+    src = load_local_image(img_path)
+    if src is None:
+        return None
+    fitted = fit_image_contain(src, box_w, box_h)
+
+    # Bo goc cho ảnh
+    try:
+        mask = Image.new("L", (box_w, box_h), 0)
+        ImageDraw.Draw(mask).rounded_rectangle(
+            [(0, 0), (box_w - 1, box_h - 1)], radius=max(0, int(radius)), fill=255,
+        )
+        out = Image.new("RGBA", (box_w, box_h), (0, 0, 0, 0))
+        out.paste(fitted, (0, 0), mask)
+        return out
+    except Exception:
+        return fitted
+
+
 def draw_single_box(
     author: str,
     time_ago: str,
@@ -233,6 +308,8 @@ def draw_single_box(
     vid_h: int = 1920,
     is_verified: bool = False,
     show_reply_mark: bool = False,
+    image_path: Optional[str] = None,
+    image_badge: str = "",
 ) -> Image.Image:
     """
     Ve 1 the Threads - layout dua tren metrics do that tu app Threads that:
@@ -264,17 +341,55 @@ def draw_single_box(
 
     dummy = ImageDraw.Draw(Image.new("RGBA", (10, 10)))
 
+    # --- PHASE 1.2: KHOANG DUNG CHO ANH BAI VIET ---
+    # Anh duoc dat DUOI noi dung text va TREN footer -> khong che avatar,
+    # ten tai khoan hay chu. Chieu cao anh bi gioi han theo vung an toan doc.
+    img_box_x = pad_left
+    img_box_w = width - pad_left - pad_right
+    img_box_h = 0
+    if image_path:
+        # Kiem tra anh co DOC DUOC khong truoc khi chua cho trong card.
+        # Anh hong -> card giong het card khong anh (fallback an toan),
+        # tranh khoang trong trong card.
+        if _img_probe(image_path) is None:
+            image_path = None
+    if image_path:
+        img_box_h = int(max_h * 0.42)          # toi da 42% chieu cao vung an toan
+        img_box_h = max(img_box_h, sc(180))
+        img_box_h = min(img_box_h, max_h)
+        # Canh duoi cho footer (neu co) + vien -> anh khong tran card
+        footer_space = max(footer_space, sc(78))
+
     # Neu card qua cao -> giam co chu cho toi khi vua vung an toan doc.
     min_body = max(sc(24), int(body_size * 0.62))
+    body_lines: List[str] = []
+    line_h = 0
     while True:
         f_body = get_font(body_size, bold=False)
         body_lines = wrap_text_to_lines(text, font=f_body, max_width=max_text_w,
                                         draw=dummy)
         line_h = max(sc(26), int(round(body_size * 1.42)))
         box_h = sc(128) + (len(body_lines) * line_h) + footer_space
+        if img_box_h:
+            box_h += img_box_h + sc(26)         # khoang cach giua text va anh
         if box_h <= max_h or body_size <= min_body:
             break
         body_size -= max(1, int(body_size * 0.08))
+
+    # Text da o kich thuoc nho nhat ma van tran -> thu co khop ANH truoc,
+    # vi anh la phan thong tin chinh va phai LUON hien thi duoc.
+    if img_box_h:
+        overflow = box_h - max_h
+        if overflow > 0:
+            new_img_h = img_box_h - overflow
+            if new_img_h < sc(140):
+                # Khong du cho anh -> bo anh (fallback: card chu, an toan)
+                img_box_h = 0
+            else:
+                img_box_h = new_img_h
+        box_h = sc(128) + (len(body_lines) * line_h) + footer_space
+        if img_box_h:
+            box_h += img_box_h + sc(26)
 
     f_name = get_font(sc(33), bold=True)
     f_time = get_font(sc(27), bold=False)
@@ -325,6 +440,35 @@ def draw_single_box(
     for ln in body_lines:
         draw.text((text_x, y_text), ln, fill=(0, 0, 0, 255), font=f_body)
         y_text += line_h
+
+    # --- PHASE 1.2: ANH BAI VIET (nam duoi text, tren footer) ---
+    # Khong che avatar / ten / chu. Dung `contain` -> khong keo meo ty le.
+    if img_box_h and image_path:
+        _img_disp = draw_post_image(image_path, img_box_w, img_box_h,
+                                    radius=sc(18))
+        if _img_disp is not None:
+            _img_y = y_text + sc(26)
+            # Vien xam nhat quanh anh de tach khoi nen video
+            draw.rounded_rectangle(
+                [(img_box_x - 1, _img_y - 1),
+                 (img_box_x + img_box_w, _img_y + img_box_h)],
+                radius=sc(18), outline=(214, 218, 224, 255), width=max(1, sc(1)),
+            )
+            img.paste(_img_disp, (img_box_x, _img_y), _img_disp)
+
+            # Nhan thu tu anh (vd "2/5") - giup nguoi xem biet anh nao dang hien
+            if image_badge:
+                f_badge = get_font(sc(26), bold=True)
+                _bw = draw.textbbox((0, 0), image_badge, font=f_badge)[2]
+                _bx = img_box_x + img_box_w - _bw - sc(28)
+                _by = _img_y + sc(14)
+                draw.rounded_rectangle(
+                    [(_bx - sc(12), _by - sc(6)),
+                     (_bx + _bw + sc(12), _by + sc(28))],
+                    radius=sc(12), fill=(0, 0, 0, 165),
+                )
+                draw.text((_bx, _by), image_badge, fill=(255, 255, 255, 255),
+                          font=f_badge)
 
     # --- Thanh hanh dong (footer) ---
     if show_footer:
@@ -699,6 +843,8 @@ def split_scene_if_long(scene, max_lines: int = MAX_LINES_PER_CARD, scale: float
             "reply_display_text": None,
             "reply_tts_text": None,
             "reply_author": None,
+            # PHASE 1.2: giu anh bai viet khi chia scene
+            "images": list(scene.get("images") or []),
         })
         i += max_lines
 

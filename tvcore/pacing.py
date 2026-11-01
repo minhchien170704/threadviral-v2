@@ -282,6 +282,43 @@ def plan_visual_slices(
     }
 
 
+def plan_image_slices(
+    image_count: int,
+    segment_count: int,
+) -> List[int]:
+    """
+    PHASE 1.2: ánh xạ ảnh -> visual theo THỨ TỰ GỐC.
+
+    Yêu cầu: "Bài nhiều ảnh: lần lượt hiển thị ảnh theo đúng thứ tự."
+
+    Quy tắc:
+      - `image_count` = số ảnh của bài (>= 0).
+      - `segment_count` = số visual của cảnh (>= 1).
+      - Ảnh được gán TUẦN TỰ cho các visual đầu, theo thứ tự gốc.
+      - Nếu số ảnh < số visual: các visual còn lại LẶP LẠI ảnh cuối cùng
+        (để không bao giờ có visual trống - tránh lỗi C1).
+      - Nếu số ảnh > số visual: chỉ dùng `segment_count` ảnh đầu
+        (mỗi visual hiển thị 1 ảnh) -> không mất thứ tự, không nhồi ảnh.
+
+    Trả về list int, `image_slices[i]` = chỉ số ảnh (0-based) cho visual i.
+    """
+    n_img = max(0, int(image_count or 0))
+    n_seg = max(1, int(segment_count or 1))
+    if n_img == 0:
+        return [-1] * n_seg
+    if n_img <= n_seg:
+        return [min(i, n_img - 1) for i in range(n_seg)]
+    # Nhiều ảnh hơn số visual -> mỗi visual một ảnh, lấy theo thứ tự gốc.
+    # (Có thể mở rộng: dùng nhiều ảnh trong 1 visual, nhưng đơn giản & an toàn
+    #  hơn là chia đều -> giữ đúng "lần lượt hiển thị theo thứ tự".)
+    step = n_img / float(n_seg)
+    out: List[int] = []
+    for i in range(n_seg):
+        idx = int(i * step)
+        out.append(min(idx, n_img - 1))
+    return out
+
+
 def plan_timeline(
     scenes: List[Dict[str, Any]],
     audio_durations: Optional[List[float]] = None,
