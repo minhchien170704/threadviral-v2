@@ -293,12 +293,12 @@ Frame cho thấy: card Threads trắng, header có avatar + tên + tick xanh, te
 |---|---|
 | `cc77d63` | `feat(phase-1.2): ho tro anh bai viet Threads (scraper -> API -> render)` — toàn bộ thay đổi Phase 1.2 (module, test, report) |
 | `25fae3d` | `docs(phase-1.2): bo sung commit hash va xac nhan main khong thay doi trong report` |
-| `xxxxxxx` | `test(phase-1.2): chinh nguong do mau M3/M9 (loai nhieu UI) va buoc quet mau` |
+| `b0f4d9b` | `test(phase-1.2): chinh nguong do mau M3/M9 (loai nhieu UI) va buoc quet mau` |
 
 Lịch sử branch:
 
 ```
-xxxxxxx test(phase-1.2): chinh nguong do mau M3/M9 (loai nhieu UI) va buoc quet mau
+b0f4d9b test(phase-1.2): chinh nguong do mau M3/M9 (loai nhieu UI) va buoc quet mau
 25fae3d docs(phase-1.2): bo sung commit hash va xac nhan main khong thay doi trong report
 cc77d63 feat(phase-1.2): ho tro anh bai viet Threads (scraper -> API -> render)
 0d3bc85 docs(phase-1.1): them PHASE_1_1_FIX_REPORT.md va bang chung FFprobe
