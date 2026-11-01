@@ -287,8 +287,56 @@ Frame cho thấy: card Threads trắng, header có avatar + tên + tick xanh, te
 
 ## 12. Commit hash
 
-*(xem mục cuối file sau khi commit)*
+| Commit | Nội dung |
+|---|---|
+| `cc77d63` | `feat(phase-1.2): ho tro anh bai viet Threads (scraper -> API -> render)` — toàn bộ thay đổi Phase 1.2 (module, test, report) |
+
+Lịch sử branch:
+
+```
+cc77d63 feat(phase-1.2): ho tro anh bai viet Threads (scraper -> API -> render)
+0d3bc85 docs(phase-1.1): them PHASE_1_1_FIX_REPORT.md va bang chung FFprobe
+1e54ebf fix(phase-1.1): giai quyet toan bo review blockers (C1, C2, H1-H6, M2/M4/M5)
+```
 
 ## 13. Xác nhận `main` không thay đổi
 
-*(xem mục cuối file sau khi commit)*
+```
+$ git rev-parse main
+8fdc4ba12f804cd9c1ef566a7a9c0cd65e43d03e
+
+$ git rev-parse origin/main
+8fdc4ba12f804cd9c1ef566a7a9c0cd65e43d03e
+
+$ git log --oneline main -1
+8fdc4ba feat(lfs): dua video nen + nhac nen vao Git LFS - clone ve co san
+```
+
+✅ `main` **không bị sửa** — vẫn ở `8fdc4ba`, khớp với `origin/main`. Tất cả thay đổi nằm trên branch `feature/phase-1-2-thread-images`.
+
+```
+$ git diff main HEAD --stat
+ tools/test_phase_1_2_e2e_real.py    |  151 +++++
+ tools/test_phase_1_2_images.py      | 1051 +++++++++++++++++++++++++++++++++++
+ tvcore/cards.py                     |  196 ++++++-
+ tvcore/config.py                    |    1 +
+ tvcore/images.py                    |  382 +++++++++++++
+ tvcore/pacing.py                    |  229 +++++++-
+ tvcore/render.py                    |  273 ++++++++-
+ tvcore/scrape.py                    |   60 +-
+ tvcore/utils.py                     |   12 +
+ ...
+ 23 files changed, 5829 insertions(+), 136 deletions(-)
+```
+
+## 14. Kết luận
+
+✅ **FIXED** — ảnh bài viết Threads **thực sự xuất hiện trong video render cuối cùng**, được chứng minh bằng:
+
+1. Render thật từ bài Threads thật (carousel 7 ảnh) → MP4 11.17s, h264+aac.
+2. Trích frame từ MP4 → ảnh hiện rõ trong card 9:16, độ bão hoà màu thay đổi theo thời gian (ảnh thật sự đổi, không phải ảnh tĩnh).
+3. Test M9 chứng minh thứ tự ảnh tuyệt đối `['cyan','lime','purple','red','blue']` trong video.
+4. 131/131 test Phase 1.2 PASS; 223/223 test Phase 1.1 PASS (không hồi quy); 230/230 full suite PASS.
+
+Tính ổn định của Phase 1.1 **không bị đánh đổi**: toàn bộ logic pacing/audio/QC cũ giữ nguyên, ảnh chỉ được thêm vào như một lớp hiển thị bổ sung với fallback an toàn (ảnh lỗi → bỏ qua, card chữ như cũ).
+
