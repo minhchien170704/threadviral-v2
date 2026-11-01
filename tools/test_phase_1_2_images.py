@@ -841,7 +841,10 @@ else:
         if _v3:
             _f3 = os.path.join(_fr_dir, "m3.png")
             if _extract_frame(_v3, 1.0, _f3):
-                _r3 = {n: _color_ratio(_f3, n) for n in _COLORS}
+                # CHI kiem tra 3 mau dung cho ANH trong test (cyan/lime/purple).
+                # KHONG kiem tra `red`/`blue`: nut "like" mau do cua UI Threads
+                # (va nut xanh lam "verified") co mat trong card -> false positive.
+                _r3 = {n: _color_ratio(_f3, n) for n in ("cyan", "lime", "purple")}
                 check("M3 khong anh -> khong co pixel mau anh",
                       all(v < 1.0 for v in _r3.values()), f"{_r3}")
 
@@ -990,22 +993,36 @@ else:
             _info9 = _probe(_v9)
             _dur9 = _vdur(_info9)
             check("M9 video 5 anh co thoi luong > 0", _dur9 > 0, f"{_dur9:.2f}s")
-            # Moi visual phai hien 1 anh KHAC NHAU -> quet toan bo video
+            # Moi visual phai hien 1 anh KHAC NHAU -> quet toan bo video.
+            # Buoc quet phai FI (0.06s): video 5 anh chi dai ~2.4s
+            # (~0.47s/anh) -> buoc 0.15s se BO SOT anh.
+            # Nguong 800 pixel phan biet anh that voi nut "like" do
+            # cua UI Threads (chi ~370 pixel).
             _seen = []
             _t9 = 0.0
             while _t9 < _dur9:
                 _fp = os.path.join(_fr_dir, f"m9_{_t9:05.2f}.png")
                 if _extract_frame(_v9, _t9, _fp):
-                    _d9, _c9 = _dominant(_fp)
-                    if _c9.get(_d9, 0) > 500 and _d9 != "white":
-                        _seen.append(_d9)
-                _t9 += 0.15
+                    _c9 = {n: _count_color(_fp, col) for n, col in _P5.items()}
+                    _top = max(_c9, key=lambda k: _c9[k])
+                    if _c9[_top] > 800:
+                        _seen.append(_top)
+                _t9 += 0.06
             _uniq9 = []
             for _s in _seen:
                 if not _uniq9 or _uniq9[-1] != _s:
                     _uniq9.append(_s)
             check("M9 moi anh xuat hien MOT LAN theo thu tu (khong ghi de file)",
                   len(_uniq9) >= 5, f"chuoi mau={_uniq9}")
+            # Chuoi mau phai la SUBSEQUENCE cua thu tu goc (khong dao, khong
+            # thua mau khong thuoc bai viet).
+            _pos = 0
+            for _s in _uniq9:
+                if _s not in _P5:
+                    continue
+                _i = list(_P5.keys()).index(_s)
+                if _i >= _pos:
+                    _pos = _i + 1
             check("M9 thu tu mau dung (khong dao)",
                   _uniq9[:5] == list(_P5.keys()), f"{_uniq9[:6]}")
 

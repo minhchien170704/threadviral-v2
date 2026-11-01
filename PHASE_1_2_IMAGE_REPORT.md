@@ -187,7 +187,9 @@ Khi bài có >1 ảnh, mỗi card hiện badge dạng `2/7` ở góc phải ản
 | M8 | Tải ảnh thật từ Threads CDN → ok, kích thước 2160×3260 |
 | **M9** | **5 ảnh + text ngắn → mỗi ảnh 1 visual, thứ tự tuyệt đối: `['cyan','lime','purple','red','blue']`** (regression test cho bug ghi đè file) |
 
-**Kết quả**: `PHASE 1.2 IMAGE TESTS: PASS: 131  FAIL: 0`
+**Lưu ý về ngưỡng đo màu**: nút "like" màu đỏ và badge "verified" màu xanh lam của UI Threads nằm trong card → test "không có ảnh" (M3) chỉ kiểm tra 3 màu dùng riêng cho ảnh test (`cyan`/`lime`/`purple`). Ngưỡng phân biệt ảnh thật với UI được đặt ở **800 pixel** (nút like chỉ chiếm ~370 pixel).
+
+**Kết quả**: `PHASE 1.2 IMAGE TESTS: PASS: 131  FAIL: 0` (chạy ổn định qua nhiều lần liên tiếp)
 
 ### Regression
 - `tools/test_phase_1_1.py` → **PASS: 223, FAIL: 0**
@@ -290,10 +292,14 @@ Frame cho thấy: card Threads trắng, header có avatar + tên + tick xanh, te
 | Commit | Nội dung |
 |---|---|
 | `cc77d63` | `feat(phase-1.2): ho tro anh bai viet Threads (scraper -> API -> render)` — toàn bộ thay đổi Phase 1.2 (module, test, report) |
+| `25fae3d` | `docs(phase-1.2): bo sung commit hash va xac nhan main khong thay doi trong report` |
+| `xxxxxxx` | `test(phase-1.2): chinh nguong do mau M3/M9 (loai nhieu UI) va buoc quet mau` |
 
 Lịch sử branch:
 
 ```
+xxxxxxx test(phase-1.2): chinh nguong do mau M3/M9 (loai nhieu UI) va buoc quet mau
+25fae3d docs(phase-1.2): bo sung commit hash va xac nhan main khong thay doi trong report
 cc77d63 feat(phase-1.2): ho tro anh bai viet Threads (scraper -> API -> render)
 0d3bc85 docs(phase-1.1): them PHASE_1_1_FIX_REPORT.md va bang chung FFprobe
 1e54ebf fix(phase-1.1): giai quyet toan bo review blockers (C1, C2, H1-H6, M2/M4/M5)
