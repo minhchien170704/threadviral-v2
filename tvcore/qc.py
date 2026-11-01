@@ -146,20 +146,41 @@ def check_script(scenes: List[Dict[str, Any]], speed: str = "+20%",
         # --- ĐỢT 1: AUDIO DÀI HƠN THỜI LƯỠNG CẢNH ---
         # Nếu biết thời lượng audio thật và thời lượng cảnh ngắn hơn ->
         # giọng đọc sẽ bị cắt mất. Đây là lỗi nghiêm trọng (mất lời đọc).
+        #
+        # ĐỢT 1.1 (fix H2): KHÔNG được tự tính lại `scene_duration()` khi
+        # thiếu `scene_durations` — hàm đó luôn trả >= audio nên check chết.
+        # Thiếu dữ liệu thực tế -> báo warning "thiếu dữ liệu" thay vì
+        # im lặng bỏ qua.
         if audio_durations and i < len(audio_durations):
             _aud = audio_durations[i]
             if _aud and _aud > 0:
                 if scene_durations and i < len(scene_durations):
                     _scene_dur = float(scene_durations[i])
+                    # ĐỢT 1.1 (fix C1): visual phải phủ kín audio.
+                    if _scene_dur + 0.05 < _aud:
+                        issues.append(_issue(
+                            "error", "visual_gap_audio",
+                            f"Cảnh {i + 1}: visual chỉ phủ {_scene_dur:.1f}s "
+                            f"trong khi audio dài {_aud:.1f}s - có khoảng trống, "
+                            "người xem sẽ thấy màn hình trống.",
+                            scene=i,
+                            fix="Chia lại visual theo thời lượng audio.",
+                        ))
+                    if _scene_dur + 0.01 < _aud:
+                        issues.append(_issue(
+                            "error", "audio_longer_than_scene",
+                            f"Cảnh {i + 1}: audio dài {_aud:.1f}s nhưng cảnh chỉ "
+                            f"{_scene_dur:.1f}s - giọng đọc sẽ bị cắt mất.",
+                            scene=i,
+                            fix="Bật 'Tự động chia cảnh' hoặc rút gọn nội dung.",
+                        ))
                 else:
-                    _scene_dur = scene_duration(text, _aud, speed)
-                if _scene_dur + 0.01 < _aud:
                     issues.append(_issue(
-                        "error", "audio_longer_than_scene",
-                        f"Cảnh {i + 1}: audio dài {_aud:.1f}s nhưng cảnh chỉ "
-                        f"{_scene_dur:.1f}s - giọng đọc sẽ bị cắt mất.",
+                        "warning", "missing_scene_duration",
+                        f"Cảnh {i + 1}: thiếu thời lượng cảnh thực tế - "
+                        "không kiểm tra được audio có bị cắt mất không.",
                         scene=i,
-                        fix="Bật 'Tự động chia cảnh' hoặc rút gọn nội dung.",
+                        fix="Chạy QC sau khi dựng timeline.",
                     ))
 
     # --- Tổng thời lượng ước tính ---

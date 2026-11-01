@@ -40,6 +40,8 @@ _ANGLE_LABELS = {
 _ANGLE_ALIASES = {
     "curiosity": "curiosity",
     "tò mò": "curiosity",
+    "to mo": "curiosity",
+    "tòmò": "curiosity",
     "debate": "debate",
     "conflict": "debate",
     "thanh luan": "debate",
@@ -50,10 +52,20 @@ _ANGLE_ALIASES = {
     "cam xuc": "emotion",
     "humor": "humor",
     "hai": "humor",
+    "hài hước": "humor",
+    "hai huoc": "humor",
+    "hài": "humor",
     "comedy": "humor",
+    "funny": "humor",
     "surprise": "surprise",
     "bat ngo": "surprise",
+    "bất ngờ": "surprise",
     "unexpected": "surprise",
+    # ĐỢT 1.1 (fix H6): thêm alias "thú vị" (Gemini hay trả về từ này
+    # cho góc bất ngờ) + bản không dấu.
+    "thú vị": "surprise",
+    "thu vi": "surprise",
+    "interesting": "surprise",
 }
 
 # ---------------------------------------------------------------------------
@@ -64,11 +76,17 @@ _ANGLE_ALIASES = {
 #   "Cả Threads đang phát sốt", "Hàng nghìn người tranh cãi",
 #   "Cả mạng xã hội chia thành hai phe", "Bài viết gây bão", "Ai cũng phải bật cười"
 # Khi không có dữ liệu chứng minh -> dùng cách diễn đạt trung tính.
+#
+# ĐỢT 1.1 (fix H4): Mỗi pattern PHẢI chứa phần định tính (cường điệu),
+# KHÔNG được dùng cụm rộng kiểu "cả threads đang" -> sửa nhầm câu trung
+# tính / câu có nghĩa đúng (vd "cả Threads đang bàn luận về bài này").
 _VIRAL_CLAIM_PATTERNS = [
-    r"cả\s+threads\s+đang",
+    r"cả\s+threads\s+đang\s+phát\s+sốt",
     r"cả\s+threads\s+xôn\s+xao",
-    r"cả\s+threads\s+cười",
+    r"cả\s+threads\s+đang\s+cười",
     r"threads\s+đang\s+phát\s+sốt",
+    r"threads\s+xôn\s+xao",
+    r"đang\s+xôn\s+xao",
     r"hàng\s+nghìn\s+người",
     r"hàng\s+ngàn\s+người",
     r"chia\s+threads\s+thành\s+hai\s+phe",
@@ -102,25 +120,71 @@ def has_unsupported_viral_claim(text: str) -> bool:
     return bool(_VIRAL_CLAIM_RE.search(t))
 
 
-# Bảng thay thế cụm bịa -> cách diễu đạt trung tính
-_VIRAL_REPLACEMENTS = [
-    (r"cả\s+threads\s+đang\s+phát\s+sốt", "Bài này đang được bàn luận"),
-    (r"cả\s+threads\s+xôn\s+xao", "Bài này đang được bàn luận"),
-    (r"cả\s+threads\s+cười", "Nhiều người đã thấy hài"),
-    (r"chia\s+threads\s+thành\s+hai\s+phe", "chia thành hai hướng"),
-    (r"chia\s+mạng\s+xã\s+hội\s+thành\s+hai\s+phe", "chia thành hai hướng"),
-    (r"mạng\s+xã\s+hội\s+chia\s+thành\s+hai\s+phe", "chia thành hai hướng"),
+# ---------------------------------------------------------------------------
+# ĐỢT 1.1 (fix H3): Bảng thay thế THEO CÂU, không theo cụm rời rạc.
+# ---------------------------------------------------------------------------
+# Lỗi H3 (Đợt 1): thay từng cụm từ tạo ra câu hỏng:
+#   "Câu chuyện này đang làm Threads tranh luận không hồi kết."
+#     -> "Câu chuyện này đang làm Threads đang được tranh luận."   (vô nghĩa)
+#   "Cả Threads đang phát sốt vì bài này"
+#     -> "Bài này đang được bàn luận vì bài này"                     (lặp chủ ngữ)
+#
+# Nay: ưu tiên thay CẢ CÂU bằng mẫu trung tính đã viết tay (đọc tự nhiên,
+# không lặp chủ ngữ, không thêm thông tin chưa được chứng minh).
+_VIRAL_SENTENCE_REPLACEMENTS = [
+    # --- "cả Threads ..." ---
+    (r"cả\s+threads\s+đang\s+phát\s+sốt\s+với\s+bài\s+này",
+     "Bài này đang được bàn luận."),
+    (r"cả\s+threads\s+đang\s+phát\s+sốt\s+vì\s+bài\s+này",
+     "Bài này đang được bàn luận."),
+    (r"cả\s+threads\s+đang\s+phát\s+sốt\s+về\s+bài\s+này",
+     "Bài này đang được bàn luận."),
+    (r"cả\s+threads\s+đang\s+phát\s+sốt",
+     "Bài này đang được bàn luận."),
+    (r"cả\s+threads\s+xôn\s+xao",
+     "Bài này đang được bàn luận."),
+    (r"cả\s+threads\s+đang\s+cười",
+     "Nhiều người đã thấy hài."),
+    # --- "Threads ..." ---
+    (r"threads\s+đang\s+phát\s+sốt", "Bài này đang được bàn luận"),
+    (r"threads\s+xôn\s+xao", "Bài này đang được bàn luận"),
+    (r"làm\s+mưa\s+threads", "được quan tâm"),
+    (r"đang\s+làm\s+mưa\s+threads", "đang được quan tâm"),
+    # --- Ca template cu (chua "cả Threads") ---
+    (r"có\s+một\s+món\s+ăn\s+đang\s+làm\s+mưa\s+threads\s+mà\s+ít\s+ai\s+biết",
+     "Có một món ăn trong bài này mà ít người để ý tới."),
+    (r"có\s+một\s+món\s+ăn\s+đang\s+làm\s+mưa\s+mà\s+ít\s+ai\s+biết",
+     "Có một món ăn trong bài này mà ít người để ý tới."),
+    (r"có\s+một\s+vụ\s+drama\s+đang\s+nóng\s+lơn\s+trên\s+threads\s+mà\s+bạn\s+chắc\s+chắn\s+chưa\s+biết",
+     "Có một vụ drama ngoài đời được kể lại qua vài dòng trong bài này."),
+    (r"một\s+câu\s+chuyện\s+tình\s+cũ\s+đang\s+khiến\s+cả\s+threads\s+tranh\s+luận\s+không\s+hồi\s+kết",
+     "Một câu chuyện tình cũ mà mỗi người đọc sẽ có một cách nhìn khác nhau."),
+    (r"câu\s+chuyện\s+này\s+đang\s+làm\s+threads\s+tranh\s+luận\s+không\s+hồi\s+kết",
+     "Câu chuyện này được kể lại qua vài dòng."),
+    # --- "dữ dội / không hồi kết" ---
+    (r"đang\s+gây\s+tranh\s+cãi\s+dữ\s+dội", "đang được tranh luận"),
+    (r"tranh\s+luận\s+không\s+hồi\s+kết", "đang được tranh luận"),
+    # --- "hàng nghìn / toàn bộ ..." ---
+    (r"hàng\s+nghìn\s+người\s+đã\s+thích", "rất nhiều người đã thích"),
     (r"hàng\s+nghìn\s+người", "rất nhiều người"),
     (r"hàng\s+ngàn\s+người", "rất nhiều người"),
     (r"toàn\s+bộ\s+threads", "nhiều người"),
-    (r"tranh\s+luận\s+không\s+hồi\s+kết", "đang được tranh luận"),
-    (r"đang\s+gây\s+tranh\s+cãi\s+dữ\s+dội", "đang được tranh luận"),
-    (r"đang\s+nóng\s+lơn", "đang được quan tâm"),
-    (r"làm\s+mưa(\s+threads)?", "được quan tâm"),
+    # --- "chia thành hai phe" ---
+    (r"chia\s+threads\s+thành\s+hai\s+phe", "chia thành hai hướng"),
+    (r"chia\s+mạng\s+xã\s+hội\s+thành\s+hai\s+phe", "chia thành hai hướng"),
+    (r"mạng\s+xã\s+hội\s+chia\s+thành\s+hai\s+phe", "chia thành hai hướng"),
+    # --- "gây bão / làm mưa / nóng lơn" ---
+    (r"gây\s+bão\s+lắm", "được quan tâm nhiều"),
+    (r"đang\s+gây\s+bão", "đang được quan tâm"),
     (r"gây\s+bão", "được quan tâm"),
+    (r"đang\s+làm\s+mưa", "đang được quan tâm"),
+    (r"làm\s+mưa", "được quan tâm"),
+    (r"đang\s+nóng\s+lơn", "đang được quan tâm"),
+    # --- "ai cũng / mọi người đều" ---
     (r"ai\s+cũng\s+phải\s+bật\s+cười", "nhiều người sẽ bật cười"),
     (r"ai\s+cũng\s+đang\s+nói", "nhiều người đang nói"),
     (r"mọi\s+người\s+đều\s+đang", "nhiều người đang"),
+    # --- "viral / lên top / kỷ lục" ---
     (r"viral\s+lắm", "được quan tâm"),
     (r"lên\s+top", "được chú ý"),
     (r"phá\s+kỷ\s+lục", "đạt mức ấn tượng"),
@@ -130,18 +194,51 @@ _VIRAL_REPLACEMENTS = [
 def sanitize_viral_claim(text: str) -> str:
     """
     Thay các cụm từ khẳng định mức độ lan truyền KHÔNG có căn cứ
-    bằng cách diễn đạt trung tính tương đương.
+    bằng cách diễu đạt trung tính tương đương.
 
     ĐỢT 1 - spec §3.2: hook phải dựa trên nội dung bài viết, comment thật,
     số lượng comment / lượt tương tác NẾU CÓ dữ liệu. Không có dữ liệu
-    -> dùng cách diễn đạt trung tính.
+    -> dùng cách diễu đạt trung tính.
+
+    ĐỢT 1.1 (fix H3): ƯU TIÊN thay CẢ CÂU bằng mẫu đã viết tay, để câu
+    luôn đọc tự nhiên và không lặp chủ ngữ. Sau đó mới áp các cụm rời rạc
+    cho phần còn sót. KHÔNG thêm thông tin chưa được chứng minh.
     """
     t = (text or "").strip()
     if not t:
         return t
     out = t
-    for pat, rep in _VIRAL_REPLACEMENTS:
+    # 1) Thay cả câu / cụm dài (an toàn, đọc tự nhiên)
+    for pat, rep in _VIRAL_SENTENCE_REPLACEMENTS:
         out = re.sub(pat, rep, out, flags=re.IGNORECASE)
+    # 2) Sua loi ngup phat sinh tu viec thay the (lặp chủ ngữ / lặp "đang")
+    out = re.sub(r"đang\s+làm\s+threads\s+đang\s+được\s+tranh\s+luận",
+                 "đang được tranh luận", out, flags=re.IGNORECASE)
+    out = re.sub(r"đang\s+làm\s+threads\s+đang\s+được\s+bàn\s+luận",
+                 "đang được bàn luận", out, flags=re.IGNORECASE)
+    out = re.sub(r"\bđang\s+được\s+được\b", "đang được", out, flags=re.IGNORECASE)
+    out = re.sub(r"\bđược\s+quan\s+tâm\s+được\b", "được quan tâm",
+                 out, flags=re.IGNORECASE)
+    # 2b) Don vet do thay ca cau (vd "bàn luận." + " vì bài này")
+    out = re.sub(r"\.\s*\.", ".", out)
+    out = re.sub(r"\s*\.\s*", ". ", out)
+    # 2c) Bo dan tu bo sung khong con logic sau khi thay (vd " vì bài này")
+    out = re.sub(r"^(bài\s+này\s+đang\s+được\s+bàn\s+luận)\s+vì\s+bài\s+này\.?$",
+                 r"\1.", out, flags=re.IGNORECASE)
+    out = re.sub(r"^(bài\s+này\s+đang\s+được\s+bàn\s+luận)\s+vì\s+bài\s+này",
+                 r"\1", out, flags=re.IGNORECASE)
+    out = re.sub(r"^(bài\s+này\s+đang\s+được\s+bàn\s+luận)\s+vì\s+bài\s+này",
+                 r"\1", out, flags=re.IGNORECASE)
+    # 2c2) "Bài này đang được bàn luận vì bài này" -> gộp chủ ngữ
+    out = re.sub(r"\bbài\s+này\s+đang\s+được\s+bàn\s+luận\s+vì\s+bài\s+này\b",
+                 "bài này đang được bàn luận", out, flags=re.IGNORECASE)
+    # 2d) "Bài này đang được bàn luận về bài này" -> bỏ "về bài này" thừa
+    out = re.sub(r"^(bài\s+này\s+đang\s+được\s+bàn\s+luận)\s+về\s+bài\s+này",
+                 r"\1", out, flags=re.IGNORECASE)
+    # 2e) Câu kết bằng "." nhưng câu sau bắt đầu bằng chữ thườp -> gộp lại
+    out = re.sub(r"\.\s+(vì|về|nhưng|mà)\s", r" \1 ", out)
+    # 3) Don khoang trang thua do thay the
+    out = re.sub(r"\s{2,}", " ", out).strip()
     return out
 
 
@@ -257,31 +354,54 @@ def detect_hook_angle(hook_text: str) -> str:
     if not raw:
         return "curiosity"
     t = deaccent(raw)
+    # Bản KHÔNG dấu nhưng giữ ranh giới từ (dùng cho cụm tiếng Anh/viết tắt)
+    # ĐỢT 1.1 (fix H5): "vai" bị bỏ vì khớp nhầm "vài" -> câu về drama bị
+    # gán nhầm humor. Thêm ranh giới từ cho mọi cụm.
+    _tw = r"(?<!\w)(?:...)(?!\w)"
 
-    # 1. Câu hỏi / tranh luận
-    if "?" in raw or re.search(
-        r"\b(y kien|quan diem|tranh luan|tranh cai|dong y|khong dong y|"
-        r"hai phe|hai luong|hai huong|ban nghi sao|ban thay sao|co nen)\b", t,
+    # 1. Câu hỏi rõ ràng (dấu "?") -> tranh luận (ưu tiên cao nhất)
+    if "?" in raw:
+        return "debate"
+
+    # 2. Hài hước - chỉ dùng cụm RÕ NGHĨA, có ranh giới từ.
+    #    ĐỢT 1.1 (fix H5): bỏ "vai" (khớp nhầm "vài") -> câu về drama bị
+    #    gán nhầm humor. Dùng bản CÓ DẤU cho "cười" để "cuối" (cuối bài)
+    #    không bị nhầm với "cười".
+    _humor = bool(
+        re.search(r"(?<!\w)(?:haha|hehe|hihi|huhu)(?!\w)", t)
+        or re.search(r"(?<!\w)(?:cười|buồn cười|hài hước|hài hài|hề hề)(?!\w)", raw)
+        or re.search(r"(?<!\w)(?:vcl|vl|kms|cringe|meme|comedy|troll|funny)(?!\w)", t)
+        or re.search(r"[\U0001F600-\U0001F64F]", raw)
+    )
+    if _humor:
+        return "humor"
+
+    # 3. Câu hỏi tu từ / kích thích tranh luận (không có dấu "?")
+    #    ĐỢT 1.1 (fix H5): thêm "mọi người thấy sao", "mọi người nghĩ gì"...
+    #    So khớp trên `t` (KHÔNG DẤU) -> pattern cũng phải không dấu.
+    if re.search(
+        r"(?<!\w)(?:y kien|quan diem|tranh luan|tranh cai|dong y|khong dong y|"
+        r"hai phe|hai luong|hai huong|ban nghi sao|ban thay sao|co nen|"
+        r"thay sao|nghi sao|nghi gi|thay gi|ban nghi|ban thay|"
+        r"moi nguoi thay|moi nguoi nghi|moi nguoi|ai cung the)(?!\w)", t,
     ):
         return "debate"
 
-    # 2. Hài hước
-    if re.search(r"\b(haha|vcl|vl|vai|kms|hai|loi|cringe|meme|buon cuoi)\b", t):
-        return "humor"
-
-    # 3. Cảm xúc
+    # 4. Cảm xúc (pattern không dấu - so khớp trên `t`)
     if re.search(
-        r"\b(yeu|buon|co don|cham|nho|khoc|cam on|xin loi|dong cam|chan tinh)\b", t,
+        r"(?<!\w)(?:yeu|buon|co don|cham|nho|khoc|cam on|xin loi|"
+        r"dong cam|chan tinh|xuc dong|chanh)(?!\w)", t,
     ):
         return "emotion"
 
-    # 4. Bất ngờ
+    # 5. Bất ngờ (pattern không dấu - so khớp trên `t`)
     if re.search(
-        r"\b(bat ngo|ngac nhien|khong ngo|ai ngo|chua ai|it ai|hoa ra|thu vi la)\b", t,
+        r"(?<!\w)(?:bat ngo|ngac nhien|khong ngo|ai ngo|chua ai|it ai|"
+        r"hoa ra|thu vi la|bat ngo that)(?!\w)", t,
     ):
         return "surprise"
 
-    # 5. Tò mò (mặc định)
+    # 6. Tò mò (mặc định - fallback trung tính)
     return "curiosity"
 
 
@@ -291,6 +411,14 @@ def normalize_angle(raw: Optional[str]) -> Optional[str]:
 
     Trả về góc hợp lệ, hoặc None nếu raw không nhận diện được
     (khi đó caller dùng heuristic từ nội dung).
+
+    ĐỢT 1.1 (fix H6): so khớp nhất quán cả bản CÓ DẤU và KHÔNG DẤU,
+    và cả bản có/không khoảng trắng giữa các từ:
+      - "tò mò" -> curiosity
+      - "to mo"  -> curiosity   (trước đây -> None)
+      - "tom o"  -> curiosity
+      - "thú vị" / "thu vi" -> surprise
+      - "hài hước" / "hai huoc" -> humor
     """
     if not raw:
         return None
@@ -298,16 +426,17 @@ def normalize_angle(raw: Optional[str]) -> Optional[str]:
     key = re.sub(r"\s+", " ", key).strip()
     if key in _ANGLE_ALIASES:
         return _ANGLE_ALIASES[key]
-    # Bỏ dấu tiếng Việt để so khớp ("tò mò" -> "to mo")
+
     from .content import deaccent
-    key2 = deaccent(key)
-    if key2 in _ANGLE_ALIASES:
-        return _ANGLE_ALIASES[key2]
-    # "to mo" (từ "tò mò") - khoảng trắng đã bị thay bằng dấu gạch
-    key3 = key2.replace(" ", "")
-    for k, v in _ANGLE_ALIASES.items():
-        if k.replace(" ", "") == key3:
-            return v
+
+    # Chuẩn hoá: bỏ dấu + bỏ khoảng trắng -> so khớp 1-1
+    def _norm(s: str) -> str:
+        return deaccent(s).replace(" ", "")
+
+    key_nospace = _norm(key)
+    for alias, canonical in _ANGLE_ALIASES.items():
+        if _norm(alias) == key_nospace:
+            return canonical
     return None
 
 

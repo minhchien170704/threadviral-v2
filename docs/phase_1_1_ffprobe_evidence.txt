@@ -1,0 +1,73 @@
+==========================================================================
+TRUONG HOP: A. nen tat / text dai
+==========================================================================
+  File            : outputs\ghien_comment_125f2bed.mp4
+  Container       : mov,mp4,m4a,3gp,3g2,mj2
+  Video stream    : codec=h264 1080x1920 fps=30/1 dur=35.600s
+  Audio stream    : codec=aac dur=35.570s
+  Format duration : 35.600000
+  AUDIO KHONG CAT : 35.570s audio <= 35.600s video -> OK
+  AUDIO KHONG LAP : audio < video -> OK
+  Timeline visual (3 overlay spans):
+       0.000 ->   11.857   (11.857s)
+      11.857 ->   23.713   (11.856s)
+      23.713 ->   35.570   (11.857s)
+  Tong thoi luong visual  : 35.570s / video 35.570s
+  THIEU (khoang trong)    : 0.000s -> OK (khong co khoang trong)
+  Khoang trong giua cac visual: KHONG CO
+  Khoang im lang > 1.5s : 0 -> OK
+
+==========================================================================
+TRUONG HOP: B. nen tat / display 1 dong + audio dai
+==========================================================================
+  File            : outputs\ghien_comment_342db5f9.mp4
+  Container       : mov,mp4,m4a,3gp,3g2,mj2
+  Video stream    : codec=h264 1080x1920 fps=30/1 dur=22.433s
+  Audio stream    : codec=aac dur=22.430s
+  Format duration : 22.433333
+  AUDIO KHONG CAT : 22.430s audio <= 22.433s video -> OK
+  AUDIO KHONG LAP : audio < video -> OK
+  Timeline visual (2 overlay spans):
+       0.000 ->   11.215   (11.215s)
+      11.215 ->   22.430   (11.215s)
+  Tong thoi luong visual  : 22.430s / video 22.430s
+  THIEU (khoang trong)    : 0.000s -> OK (khong co khoang trong)
+  Khoang trong giua cac visual: KHONG CO
+  Khoang im lang > 1.5s : 0 -> OK
+
+==========================================================================
+TRUONG HOP: C. nen gameplay BAT / display 1 dong + audio dai
+==========================================================================
+  File            : outputs\ghien_comment_efdd6974.mp4
+  Container       : mov,mp4,m4a,3gp,3g2,mj2
+  Video stream    : codec=h264 1080x1920 fps=30/1 dur=22.433s
+  Audio stream    : codec=aac dur=22.430s
+  Format duration : 22.433333
+  AUDIO KHONG CAT : 22.430s audio <= 22.433s video -> OK
+  AUDIO KHONG LAP : audio < video -> OK
+  Timeline visual (2 overlay spans):
+       0.000 ->   11.215   (11.215s)
+      11.215 ->   22.430   (11.215s)
+  Tong thoi luong visual  : 22.430s / video 22.430s
+  THIEU (khoang trong)    : 0.000s -> OK (khong co khoang trong)
+  Khoang trong giua cac visual: KHONG CO
+  Khoang im lang > 1.5s : 0 -> OK
+
+==========================================================================
+TRUONG HOP: D. co reply / text dai
+==========================================================================
+  File            : outputs\ghien_comment_f23ba584.mp4
+  Container       : mov,mp4,m4a,3gp,3g2,mj2
+  Video stream    : codec=h264 1080x1920 fps=30/1 dur=35.600s
+  Audio stream    : codec=aac dur=35.570s
+  Format duration : 35.600000
+  AUDIO KHONG CAT : 35.570s audio <= 35.600s video -> OK
+  AUDIO KHONG LAP : audio < video -> OK
+  Timeline visual (3 overlay spans):
+       0.000 ->   11.857   (11.857s)
+      11.857 ->   23.713   (11.856s)
+      23.713 ->   35.570   (11.857s)
+  Tong thoi luong visual  : 35.570s / video 35.570s
+  THIEU (khoang trong)    : 0.000s -> OK (khong co khoang trong)
+  Khoang trong giua cac visual: KHONG CO
+  Khoang im lang > 1.5s : 0 -> OK

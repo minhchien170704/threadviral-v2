@@ -13,6 +13,16 @@ Không bao giờ cắt ngắn hơn thời gian TTS -> tránh mất đầu/cuối
 BUG ĐÃ SỬA (Đợt 1): trước đây `scene_duration()` clamp cứng ở MAX_SCENE_SECONDS=12.0.
 => Một đoạn TTS dài 27s bị cắt còn 12s -> mất 15s giọng đọc.
    Nay MAX_SCENE_SECONDS chỉ là NGUỒNG KHUYẾN NGHỊ chia visual, KHÔNG cắt audio.
+
+NGUỒN TIMELINE CHÍNH THỨC (Đợt 1.1 - M4):
+  Module này là nguồn DUY NHẤT tính thời lượng / chia visual.
+  - `scene_duration()`      -> thời lượng 1 cảnh (>= audio, không cắt audio)
+  - `plan_timeline()`       -> kế hoạch thời lượng cho nhiều cảnh (API /api/timeline)
+  - `plan_visual_slices()`  -> nguồn DUY NHẤT chia visual cho 1 cảnh có audio dài
+  - `split_visual_segments()` -> helper chia đều, CHỈ được gọi từ plan_visual_slices()
+
+  `render.py` KHÔNG tự tính lại timeline: nó dùng `plan_visual_slices()` và
+  đo lại thời lượng thực tế từ file audio để truyền cho QC pass 2.
 """
 from typing import Any, Dict, List, Optional
 import math
@@ -155,6 +165,7 @@ def scene_duration(
 def split_visual_segments(
     audio_duration: float,
     max_segment: float = MAX_SCENE_SECONDS,
+    n_segments: Optional[int] = None,
 ) -> List[Dict[str, float]]:
     """
     Chia một đoạn audio dài thành nhiều VISUAL segment liên tục.
@@ -163,6 +174,13 @@ def split_visual_segments(
     cùng một file audio (dùng để đổi ảnh giữa chừng).
 
     Ví dụ audio 27s, max_segment 9s -> 3 segment: 0-9, 9-18, 18-27.
+
+    `n_segments`: (tuỳ chọn) ép số phần. Nếu None -> tự tính
+        `ceil(dur / max_segment)` để mỗi đoạn <= max_segment.
+
+    Luôn đảm bảo:
+      - Các đoạn LIÊN TỤC (không khoảng trống).
+      - Tổng thời lượng == audio_duration (sai số <= 0.001s).
 
     Trả về list [{"index", "start", "end", "duration"}].
     """
@@ -173,7 +191,12 @@ def split_visual_segments(
     if seg_max <= 0:
         seg_max = MAX_SCENE_SECONDS
 
-    n = max(1, int(math.ceil(dur / seg_max)))
+    if n_segments is not None and int(n_segments) >= 1:
+        n = int(n_segments)
+    else:
+        n = max(1, int(math.ceil(dur / seg_max)))
+    n = max(1, n)
+
     # Chia đều thành n phần -> mỗi phần <= seg_max
     step = dur / n
     segments: List[Dict[str, float]] = []
@@ -187,6 +210,76 @@ def split_visual_segments(
             "duration": round(end - start, 3),
         })
     return segments
+
+
+def plan_visual_slices(
+    audio_duration: float,
+    text_parts: int = 1,
+    max_segment: float = MAX_SCENE_SECONDS,
+) -> Dict[str, Any]:
+    """
+    Lập kế hoạch cắt VISUAL cho một cảnh có audio dài.
+
+    NGUYÊN TẮC (fix C1 - Đợt 1.1):
+      - Visual PHẢI phủ kín toàn bộ khoảng thời gian audio.
+      - Không được có khoảng trống (video trống trong khi audio vẫn phát).
+      - Audio KHÔNG bị cắt, lặp hay mất.
+      - Thứ tự nội dung text được giữ nguyên.
+
+    Vì sao cần hàm này?
+      `split_visual_segments()` (theo thời lượng) có thể tạo N đoạn, còn
+      `split_visual_text_parts()` chỉ tạo được K < N phần text (vd text chỉ
+      wrap ra 8 dòng, mỗi thẻ chứa tối đa 7 dòng -> K = 2). Nếu render lặp
+      theo K thì các đoạn còn lại KHÔNG có visual -> video trống.
+
+    Chiến lược:
+      - `n_min` = số visual tối thiểu để mỗi đoạn <= `max_segment`.
+      - `n_text` = số phần text thực tế (>= 1).
+      - `count` = max(n_min, n_text):
+          + n_text >= n_min -> mỗi phần text 1 visual, thời gian chia đều.
+          + n_text <  n_min -> có nhiều visual hơn phần text -> phần text CUỐI
+            được giữ hiển thị liên tiếp qua nhiều đoạn (KHÔNG tạo đoạn trống).
+      - Thời gian luôn chia đều `count` phần nên mỗi đoạn <= max_segment.
+
+    Trả về:
+      {
+        "count": int,
+        "segments": [{"index","start","end","duration"}, ...],
+        "part_index": [int, ...],   # visual i dùng phần text nào
+        "total_duration": float,    # == audio_duration
+      }
+    """
+    dur = float(audio_duration or 0.0)
+    if dur <= 0:
+        return {"count": 0, "segments": [], "part_index": [], "total_duration": 0.0}
+
+    seg_max = float(max_segment or MAX_SCENE_SECONDS)
+    if seg_max <= 0:
+        seg_max = MAX_SCENE_SECONDS
+
+    n_min = max(1, int(math.ceil(dur / seg_max)))
+    n_text = max(1, int(text_parts or 1))
+
+    count = max(n_min, n_text)
+
+    # Phân bổ phần text cho từng visual.
+    # Nếu n_text >= count -> mỗi visual một phần (đơn giản, giữ thứ tự).
+    # Nếu n_text <  count -> các visual cuối lặp lại phần text cuối cùng,
+    #   để vẫn CÓ HÌNH trong suốt khoảng thời gian audio.
+    part_index: List[int] = []
+    for i in range(count):
+        if n_text >= count:
+            part_index.append(i)
+        else:
+            part_index.append(min(i, n_text - 1))
+
+    segments = split_visual_segments(dur, seg_max, n_segments=count)
+    return {
+        "count": count,
+        "segments": segments,
+        "part_index": part_index,
+        "total_duration": dur,
+    }
 
 
 def plan_timeline(

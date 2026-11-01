@@ -27,7 +27,7 @@ from .cards import (
     safe_overlay_y, scale_for, split_visual_text_parts,
 )
 from .content import select_comments
-from .pacing import MAX_SCENE_SECONDS, scene_duration, split_visual_segments
+from .pacing import MAX_SCENE_SECONDS, plan_visual_slices, scene_duration
 from .qc import check_script, check_video
 from .tts import local_slang_to_tts, make_tts_audio
 from .utils import (
@@ -362,39 +362,26 @@ async def render_video(req, progress: ProgressFn = None) -> dict:
                 "Vui lòng thử lại hoặc đổi giọng/nhịp độ."
             )
 
-        # --- ĐỢT 1: QC PASS 2 SAU KHI CÓ AUDIO THẬT ---
-        # Lần QC đầu chạy trước khi tạo TTS nên không biết thời lượng
-        # audio thật. Ở đây mới có -> kiểm tra lại để phát hiện chính xác
-        # trường hợp audio dài hơn cảnh (sẽ mất lời đọc).
-        audio_durations: List[float] = []
-        for meta in scenes_meta:
-            try:
-                audio_durations.append(get_media_duration(meta["a1_path"], 0.0))
-            except Exception:
-                audio_durations.append(0.0)
-        if not getattr(req, "skip_qc", False) and any(a > 0 for a in audio_durations):
-            try:
-                qc2 = check_script(
-                    scenes, speed=getattr(req, "speed", "+20%"),
-                    audio_durations=audio_durations,
-                )
-                _errs = [i for i in qc2["issues"] if i["severity"] == "error"]
-                if _errs:
-                    detail = "; ".join(e["message"] for e in _errs[:3])
-                    raise ValueError(
-                        f"Kiểm tra chất lượng thất bại: {detail}. "
-                        "Bấm 'Xuất bỏ qua kiểm tra' nếu muốn tiếp tục."
-                    )
-                qc_report = qc2
-            except ValueError:
-                raise
-            except Exception:
-                pass
+        # --- ĐỢT 1.1 (fix H2): QC PASS 2 dùng thời lượng THỰC TẾ ---
+        # Lỗi H2 (Đợt 1): QC pass 2 gọi `check_script()` KHÔNG truyền
+        # `scene_durations`, nên qc.py tự tính lại bằng `scene_duration()`.
+        # Mà `scene_duration()` LUÔN trả >= audio -> điều kiện
+        # `scene_dur + 0.01 < audio` không bao giờ đúng -> check chết.
+        #
+        # Nay QC pass 2 chạy SAU khi đã dựng xong timeline (BƯỚC 2) và
+        # dùng thời lượng visual/audio đo được từ timeline thực tế.
+        # (Xem BƯỚC 2 bên dưới.)
 
         # ============ BƯỚC 2: TẠO ẢNH THẺ & LẬP TIMELINE ============
         timeline_segments = []
         audio_segment_paths = []
         cur_time = 0.0
+        # Thời lượng thực tế theo từng cảnh (dùng cho QC pass 2):
+        #   scene_audio_durs  = thời lượng audio chính của cảnh (đã pad)
+        #   scene_visual_durs = TỔNG thời lượng các visual của cảnh
+        # Nếu visual_cover < audio_cover -> có khoảng trống (lỗi C1).
+        scene_audio_durs: List[float] = []
+        scene_visual_durs: List[float] = []
 
         # Khoảng nghỉ giữa các cảnh. Video timeline và file audio phải
         # cùng độ dài, nếu không mỗi cảnh sẽ lệch PAD giây và tích luỹ.
@@ -459,22 +446,64 @@ async def render_video(req, progress: ProgressFn = None) -> dict:
             # (theo dòng, không mất từ), nhưng AUDIO vẫn phát LIÊN TỤC:
             # file audio chỉ được thêm vào audio_segment_paths ĐÚNG 1 LẦN,
             # còn visual thì nhiều đoạn dùng chung khoảng thời gian đó.
-            _visual_segs = split_visual_segments(dur1, MAX_SCENE_SECONDS)
-            _n_vis = len(_visual_segs)
+            # --- ĐỢT 1.1 (fix C1): CHIA VISUAL PHỦ KÍN AUDIO ---
+            # Lỗi C1 (Đợt 1): `split_visual_segments()` tạo N đoạn theo thời
+            # lượng, còn `split_visual_text_parts()` chỉ tạo được K < N phần
+            # text. Vòng lặp lặp theo K -> các đoạn còn lại KHÔNG có visual
+            # -> VIDEO TRỐNG trong khi audio vẫn phát (9-18s trên video 27s).
+            #
+            # Nay dùng `plan_visual_slices()` làm nguồn chia DUY NHẤT:
+            #   - count = max(số đoạn tối thiểu theo thời lượng, số phần text)
+            #   - Mỗi visual LUÔN có một phần text (phần cuối lặp lại nếu thiếu)
+            #   - Tổng thời lượng visual == dur1 (sai số <= 0.001s)
+            #   - Audio thêm vào audio_segment_paths ĐÚNG 1 LẦN
             _is_plain_card = sc["author"] not in ("__hook__", "__cta__", "__narr__")
+            _is_root_v = (meta["idx"] == 0)
+            if scenes and scenes[0]["author"] == "__hook__":
+                _is_root_v = (meta["idx"] == 1)
 
-            if _n_vis > 1 and _is_plain_card:
-                _is_root_v = (meta["idx"] == 0)
-                if scenes and scenes[0]["author"] == "__hook__":
-                    _is_root_v = (meta["idx"] == 1)
-                _text_parts = split_visual_text_parts(
-                    sc.get("display_text") or "", _n_vis,
+            _visual_segs: List[Dict[str, float]] = []
+            _text_parts: List[str] = []
+            _part_index: List[int] = []
+            if _is_plain_card:
+                # 1) Chia text TRƯỚC, theo số phần TỐI ĐA khả thi (mỗi phần
+                #    <= max_lines dong) -> K phan thuc te.
+                # 2) Sau do moi quyet dinh so visual: count = max(n_min, K).
+                # 3) moi visual tro toi 1 phan text that; phan text CUOI duoc
+                #    giu hien thi qua nhieu doan lien tiep (khong tao doan rong).
+                #
+                # LƯU Ý (fix C1): KHÔNG chia lại theo `count` o buoc 2, vi
+                # `split_visual_text_parts()` co the tra ve FE hon phan (do
+                # gop phan cuoi qua ngan) -> se lam LẶP LẠI toan bo text.
+                _probe_parts = split_visual_text_parts(
+                    sc.get("display_text") or "", 99,
                     scale=card_scale, vid_w=vid_w, is_root=_is_root_v,
                 )
-                # Nếu không chia được (text quá ngắn) -> giữ nguyên 1 visual
-                if len(_text_parts) > 1:
-                    for _vi, _tp in enumerate(_text_parts):
-                        _vp = f"{meta['c1_path']}.v{_vi}.png"
+                _text_parts = [p for p in _probe_parts]
+                if not _text_parts or not any(p.strip() for p in _text_parts):
+                    _text_parts = [(sc.get("display_text") or "")]
+                _n_text = len(_text_parts)
+                _plan_v = plan_visual_slices(dur1, _n_text, MAX_SCENE_SECONDS)
+                _visual_segs = _plan_v["segments"]
+                _part_index = _plan_v["part_index"]
+
+            if len(_visual_segs) > 1:
+                # Mỗi visual có 1 ảnh riêng (dùng lại ảnh nếu cùng phần text).
+                # Cache key = (phần text, có footer hay không) để visual CUỐI
+                # vẫn hiện footer dù chia sẻ ảnh với visual trước đó.
+                _img_cache: Dict[tuple, str] = {}
+                _last_part = _part_index[-1] if _part_index else 0
+                _did_split = True
+                for _vi, _seg in enumerate(_visual_segs):
+                    _pi = _part_index[_vi] if _vi < len(_part_index) else _last_part
+                    _want_footer = (_vi == len(_visual_segs) - 1 and not meta["has_reply"])
+                    _ck = (_pi, _want_footer)
+                    if _ck in _img_cache:
+                        _vp = _img_cache[_ck]
+                    else:
+                        _vp = f"{meta['c1_path']}.v{_pi}{'f' if _want_footer else ''}.png"
+                        _tp = _text_parts[_pi] if _pi < len(_text_parts) else _text_parts[-1]
+                        # Stats chỉ hiện ở visual đầu; footer ở visual cuối.
                         _vimg = draw_single_box(
                             sc["author"], sc["time_ago"], _tp, sc.get("avatar_url"),
                             sc.get("likes", "") if _vi == 0 else "",
@@ -482,33 +511,31 @@ async def render_video(req, progress: ProgressFn = None) -> dict:
                             sc.get("reposts", "") if _vi == 0 else "",
                             sc.get("shares", "") if _vi == 0 else "",
                             sc.get("author_liked", True),
-                            show_footer=(_vi == len(_text_parts) - 1 and not meta["has_reply"]),
+                            show_footer=_want_footer,
                             is_root_post=_is_root_v,
                             scale=card_scale, vid_w=vid_w, vid_h=vid_h,
                             is_verified=bool(sc.get("is_verified")),
                         )
                         _vimg.save(_vp, "PNG")
                         temp_files.append(_vp)
-                        _seg = _visual_segs[_vi]
-                        timeline_segments.append({
-                            "type": "card", "img_path": _vp,
-                            "dur": _seg["duration"],
-                            "start": cur_time + _seg["start"],
-                            "end": cur_time + _seg["end"],
-                        })
-                    # Audio chỉ thêm 1 LẦN cho toàn bộ nhóm visual
-                    audio_segment_paths.append(meta["a1_path"])
-                    cur_time += dur1
-                    last_card_path = timeline_segments[-1]["img_path"]
-                else:
+                        _img_cache[_ck] = _vp
                     timeline_segments.append({
-                        "type": "card", "img_path": meta["c1_path"],
-                        "dur": dur1, "start": cur_time, "end": cur_time + dur1,
+                        "type": "card", "img_path": _vp,
+                        "dur": _seg["duration"],
+                        "start": cur_time + _seg["start"],
+                        "end": cur_time + _seg["end"],
                     })
-                    audio_segment_paths.append(meta["a1_path"])
-                    cur_time += dur1
-                    last_card_path = meta["c1_path"]
+                # Audio chỉ thêm 1 LẦN cho toàn bộ nhóm visual
+                audio_segment_paths.append(meta["a1_path"])
+                cur_time += dur1
+                last_card_path = timeline_segments[-1]["img_path"]
+                # Phần text CUỐI -> reply card không lặp lại toàn bộ text gốc
+                _last_visual_img = timeline_segments[-1]["img_path"]
+                # Thời lượng visual thực tế của cảnh này (dùng cho QC pass 2)
+                scene_visual_durs.append(
+                    round(sum(_seg["duration"] for _seg in _visual_segs), 3))
             else:
+                _did_split = False
                 timeline_segments.append({
                     "type": "card", "img_path": meta["c1_path"],
                     "dur": dur1, "start": cur_time, "end": cur_time + dur1,
@@ -516,6 +543,10 @@ async def render_video(req, progress: ProgressFn = None) -> dict:
                 audio_segment_paths.append(meta["a1_path"])
                 cur_time += dur1
                 last_card_path = meta["c1_path"]
+                _last_visual_img = meta["c1_path"]
+                scene_visual_durs.append(round(dur1, 3))
+            # Thời lượng AUDIO thực tế của cảnh (đã pad)
+            scene_audio_durs.append(round(dur1, 3))
 
             if meta["has_reply"]:
                 padded_a2 = pad_audio(meta["a2_path"], meta["a2_path"] + ".pad.aac", SEG_PAD)
@@ -545,6 +576,30 @@ async def render_video(req, progress: ProgressFn = None) -> dict:
                                               Image.LANCZOS)
                     stacked_h = box1_img.height + box2_img.height + 6
                 stacked_img = Image.new("RGBA", (box1_img.width, stacked_h), (0, 0, 0, 0))
+                # ĐỢT 1.1 (fix M5): khi cảnh đã bị chia visual, reply card
+                # dùng ảnh visual CUỐI (chứa phần text cuối) thay vì ảnh
+                # text đầy đủ -> không lặp lại toàn bộ nội dung gốc.
+                if _did_split and _last_visual_img != meta["c1_path"]:
+                    try:
+                        _top_img = Image.open(_last_visual_img).convert("RGBA")
+                        if _top_img.width != box1_img.width:
+                            _r = box1_img.width / float(_top_img.width)
+                            _top_img = _top_img.resize(
+                                (box1_img.width, max(1, int(_top_img.height * _r))),
+                                Image.LANCZOS,
+                            )
+                        box1_img = _top_img
+                        stacked_h = box1_img.height + box2_img.height + 6
+                        if stacked_h > max_stack_h:
+                            ratio = max_stack_h / float(stacked_h)
+                            new_w = max(1, int(box1_img.width * ratio))
+                            box1_img = box1_img.resize(
+                                (new_w, max(1, int(box1_img.height * ratio))), Image.LANCZOS)
+                            box2_img = box2_img.resize(
+                                (new_w, max(1, int(box2_img.height * ratio))), Image.LANCZOS)
+                            stacked_h = box1_img.height + box2_img.height + 6
+                    except Exception:
+                        pass
                 stacked_img.paste(box1_img, (0, 0))
                 stacked_img.paste(box2_img, (0, box1_img.height + 6))
                 stacked_img.save(meta["c2_path"], "PNG")
@@ -583,6 +638,30 @@ async def render_video(req, progress: ProgressFn = None) -> dict:
         total_dur = cur_time
         if total_dur > MAX_RENDER_SECONDS:
             raise ValueError(f"Video quá dài ({total_dur:.0f}s, tối đa {MAX_RENDER_SECONDS}s).")
+
+        # --- ĐỢT 1.1 (fix H2): QC PASS 2 với thời lượng THỰC TẾ ---
+        # Chạy SAU khi đã dựng timeline -> dùng đúng thời lượng visual/audio
+        # đo từ timeline thực tế, KHÔNG tự tính lại bằng `scene_duration()`
+        # (hàm đang được kiểm tra -> check sẽ chết).
+        if not getattr(req, "skip_qc", False) and scene_audio_durs:
+            try:
+                qc2 = check_script(
+                    scenes, speed=getattr(req, "speed", "+20%"),
+                    audio_durations=scene_audio_durs,
+                    scene_durations=scene_visual_durs,
+                )
+                _errs = [i for i in qc2["issues"] if i["severity"] == "error"]
+                if _errs:
+                    detail = "; ".join(e["message"] for e in _errs[:3])
+                    raise ValueError(
+                        f"Kiểm tra chất lượng thất bại: {detail}. "
+                        "Bấm 'Xuất bỏ qua kiểm tra' nếu muốn tiếp tục."
+                    )
+                qc_report = qc2
+            except ValueError:
+                raise
+            except Exception:
+                pass
 
         # ============ BƯỚC 3: DỰNG LỆNH FFMPEG ============
         await _safe_progress(p, 0.55, "Đang dựng timeline FFmpeg...")

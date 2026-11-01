@@ -72,6 +72,13 @@ def validate_weights(weights: Optional[Dict[str, float]]) -> Dict[str, float]:
         if isinstance(v, bool) or not isinstance(v, (int, float)):
             raise WeightError(f"Trọng số '{k}' phải là số.")
         fv = float(v)
+        # ĐỢT 1.1 (fix H1): NaN / +Inf / -Inf phải bị từ chối.
+        # - `fv < 0` và `fv > 1` đều False với NaN -> NaN lọt qua và lan
+        #   vào điểm chấm -> API trả JSON `NaN` (không hợp lệ RFC 8259).
+        if not math.isfinite(fv):
+            raise WeightError(
+                f"Trọng số '{k}' phải là số hữu hạn (không được NaN/Infinity)."
+            )
         if fv < 0:
             raise WeightError(f"Trọng số '{k}' không được âm.")
         if fv > 1:
@@ -530,39 +537,82 @@ def score_comment(text: str, root_text: str = "", likes: int = 0,
 
     # --- ĐỢT 1: GIẢI THÍCH ĐIỂM CHI TIẾT (score_reasons) ---
     # Mỗi lý do là chuỗi mô tả dễ đọc cho UI, kèm mức độ mạnh.
+    #
+    # ĐỢT 1.1 (fix C2): TRƯỚC đây chỉ thêm tiêu chí VƯỢT ngưỡng -> các
+    # tiêu chí dưới ngưỡng vẫn đóng góp vào `total` nhưng không có mặt
+    # trong `score_reasons` -> tổng contribution lệch tới 0.14 so với total
+    # (giải thích sai). Nay MỌI thành phần thực sự đóng góp đều được liệt kê.
+    #
+    # Ràng buộc: sum(contribution) == total (sai số <= 1e-4).
     score_reasons: List[Dict[str, Any]] = []
 
-    def _add(key: str, label: str, score: float, threshold: float, why: str):
-        if score >= threshold:
-            score_reasons.append({
-                "key": key,
-                "label": label,
-                "score": round(float(score), 4),
-                "contribution": round(float(score) * w[key], 4),
-                "why": why,
-            })
+    # Ngưỡng "nổi bật" (dùng để gắn cờ is_primary) - KHÔNG dùng để lọc.
+    _PRIMARY_THRESHOLDS = {
+        "interesting": 0.5,
+        "discussion": 0.5,
+        "humor": 0.45,
+        "relevance": 0.45,
+        "concise": 0.6,
+    }
+    _WHY = {
+        "interesting": "Có câu hỏi, ý kiến cá nhân hoặc kể chuyện riêng.",
+        "discussion": "Có câu hỏi kích thích thảo luận hoặc ý kiến trái ngược.",
+        "humor": "Có yếu tố hài hước hoặc bất ngờ trong cách diễn đạt.",
+        "relevance": "Liên quan trực tiếp đến nội dung bài đăng gốc.",
+        "concise": "Độ dài vừa phải để đọc nhanh trên màn hình điện thoại.",
+    }
+    _LABELS = {
+        "interesting": "Độ thú vị",
+        "discussion": "Gây thảo luận",
+        "humor": "Hài hước / bất ngờ",
+        "relevance": "Liên quan bài viết",
+        "concise": "Ngắn gọn / dễ hiểu",
+    }
 
-    _add("interesting", "Độ thú vị", parts["interesting"], 0.5,
-         "Có câu hỏi, ý kiến cá nhân hoặc kể chuyện riêng.")
-    _add("discussion", "Gây thảo luận", parts["discussion"], 0.5,
-         "Có câu hỏi kích thích thảo luận hoặc ý kiến trái ngược.")
-    _add("humor", "Hài hước / bất ngờ", parts["humor"], 0.45,
-         "Có yếu tố hài hước hoặc bất ngờ trong cách diễn đạt.")
-    _add("relevance", "Liên quan bài viết", parts["relevance"], 0.45,
-         "Liên quan trực tiếp đến nội dung bài đăng gốc.")
-    _add("concise", "Ngắn gọn / dễ hiểu", parts["concise"], 0.6,
-         "Độ dài vừa phải để đọc nhanh trên màn hình điện thoại.")
+    # Tổng contribution của 5 tiêu chí (chưa gồm likes bonus).
+    _weighted_sum = sum(parts[k] * w[k] for k in _LABELS)
+
+    for _k in _LABELS:
+        _score = float(parts[_k])
+        _contrib = float(_score) * float(w[_k])
+        score_reasons.append({
+            "name": _LABELS[_k],
+            "key": _k,
+            "label": _LABELS[_k],
+            "score": round(_score, 4),
+            "weight": round(float(w[_k]), 4),
+            "contribution": round(_contrib, 4),
+            "is_primary": bool(_score >= _PRIMARY_THRESHOLDS[_k]),
+            "why": _WHY[_k],
+        })
+
     if n_likes > 0:
         score_reasons.append({
+            "name": "Lượt tương tác",
             "key": "likes",
             "label": "Lượt tương tác",
             "score": round(like_bonus, 4),
+            "weight": 1.0,
             "contribution": round(like_bonus, 4),
+            "is_primary": bool(like_bonus >= 0.05),
             "why": f"Nhận {n_likes} lượt thích trên bài gốc.",
         })
 
+    # Cân bằng sai số làm tròn: đảm bảo sum(contribution) == total.
+    # (Các contribution đã làm tròn 4 chữ số, total cũng vậy -> hiệu chỉnh
+    # ở entry cuối cùng để tổng khớp tuyệt đối trong sai số 1e-4.)
+    _total_r = round(total, 4)
+    _sum_r = round(sum(r["contribution"] for r in score_reasons), 4)
+    _delta = round(_total_r - _sum_r, 4)
+    if abs(_delta) > 0 and score_reasons:
+        _last = score_reasons[-1]
+        _last["contribution"] = round(float(_last["contribution"]) + _delta, 6)
+        # Giữ trường giải thích phản ánh đúng: total = _weighted_sum + like_bonus
+        _last["score"] = round(float(_last["score"]), 4)
+        _last["weight"] = round(float(_last["weight"]), 4)
+
     return {
-        "total": round(total, 4),
+        "total": _total_r,
         "parts": {k: round(v, 4) for k, v in parts.items()},
         "reasons": reasons,
         "score_reasons": score_reasons,

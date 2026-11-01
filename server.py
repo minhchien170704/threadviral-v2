@@ -13,13 +13,15 @@ Cấu trúc:
   tvcore/uploads.py  - kiểm tra file upload an toàn
 """
 import asyncio
+import math
 import os
 import shutil
 import sys
 from typing import Dict, List, Optional
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 
@@ -70,6 +72,21 @@ if sys.platform == "win32":
         pass
 
 app = FastAPI(title="Ghiền Đọc Comment - AI Video Maker", version="3.0")
+
+
+# ĐỢT 1.1 (fix H1): Pydantic mặc định trả 422 khi body sai khuôn dạng.
+# Yêu cầu spec: payload không hợp lệ (NaN/Infinity trong weights) phải trả
+# HTTP 400 kèm thông báo lỗi rõ ràng cho client.
+@app.exception_handler(RequestValidationError)
+async def _validation_handler(request, exc: RequestValidationError):
+    _msgs = []
+    for _e in exc.errors():
+        _loc = ".".join(str(x) for x in _e.get("loc", ()) if x != "body")
+        _msgs.append(f"{_loc}: {_e.get('msg', 'giá trị không hợp lệ')}")
+    return JSONResponse(
+        status_code=400,
+        content={"detail": "Dữ liệu gửi lên không hợp lệ. " + "; ".join(_msgs[:5])},
+    )
 
 # Chỉ cho 1 render chạy đồng thời (tránh tranh chấp edge-tts + CPU).
 # Được tạo lazily vì asyncio.Lock cần event loop.
@@ -181,7 +198,28 @@ class AnalyzeRequest(BaseModel):
     min_score: float = Field(default=0.18, ge=0.0, le=1.0)
     # ĐỢT 1: cho phép tuỳ chỉnh trọng số chấm điểm (tuỳ chọn).
     # Không truyền -> dùng mặc định (tương thích ngược).
+    #
+    # ĐỢT 1.1 (fix H1): chặn NaN / Infinity NGAY TẠI TẦNG API.
+    # `Dict[str, float]` của Pydantic v2 CHẤP NHẬN NaN/Inf (float hợp lệ về
+    # kiểu) -> nếu không chặn, NaN lọt vào scoring -> API trả JSON `NaN`
+    # (không hợp lệ RFC 8259 -> JSON.parse phía JS ném exception).
     weights: Optional[Dict[str, float]] = None
+
+    @field_validator("weights")
+    @classmethod
+    def _check_weights_finite(cls, v: Optional[Dict[str, float]]) -> Optional[Dict[str, float]]:
+        if v is None:
+            return v
+        for k, val in v.items():
+            try:
+                fv = float(val)
+            except (TypeError, ValueError):
+                raise ValueError(f"Trọng số '{k}' phải là số.")
+            if not math.isfinite(fv):
+                raise ValueError(
+                    f"Trọng số '{k}' phải là số hữu hạn (không được NaN/Infinity)."
+                )
+        return v
 
 
 class QcRequest(BaseModel):
